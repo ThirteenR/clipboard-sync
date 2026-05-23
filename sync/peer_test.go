@@ -85,9 +85,9 @@ func TestPeerManagerBroadcast(t *testing.T) {
 }
 
 func TestPeerManagerIgnoresOwnMessage(t *testing.T) {
-	callCount := 0
+	callCh := make(chan struct{}, 10)
 	pm := NewPeerManager("local-uuid", func(m Message) {
-		callCount++
+		callCh <- struct{}{}
 	})
 
 	server, client := net.Pipe()
@@ -112,8 +112,10 @@ func TestPeerManagerIgnoresOwnMessage(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if callCount > 0 {
-		t.Errorf("own message should be ignored, got %d callbacks", callCount)
+	select {
+	case <-callCh:
+		t.Error("own message should be ignored, got a callback")
+	default:
 	}
 
 	// Send a message FROM another peer — should trigger callback
@@ -125,10 +127,11 @@ func TestPeerManagerIgnoresOwnMessage(t *testing.T) {
 	data2, _ := Encode(msg2)
 	client.Write(data2)
 
-	time.Sleep(50 * time.Millisecond)
-
-	if callCount != 1 {
-		t.Errorf("expected 1 callback for remote message, got %d", callCount)
+	select {
+	case <-callCh:
+		// expected
+	case <-time.After(100 * time.Millisecond):
+		t.Error("expected callback for remote message, got none")
 	}
 }
 
