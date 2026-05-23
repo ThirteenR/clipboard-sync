@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 type Peer struct {
@@ -14,29 +15,32 @@ type Peer struct {
 }
 
 type PeerManager struct {
-	mu        sync.RWMutex
-	peers     map[string]*Peer
-	localUUID string
-	onMessage func(Message)
+	mu          sync.RWMutex
+	peers       map[string]*Peer
+	localUUID   string
+	onMessage   func(Message)
+	readTimeout time.Duration
 }
 
-func NewPeerManager(localUUID string, onMessage func(Message)) *PeerManager {
+func NewPeerManager(localUUID string, onMessage func(Message), readTimeout time.Duration) *PeerManager {
 	return &PeerManager{
-		peers:     make(map[string]*Peer),
-		localUUID: localUUID,
-		onMessage: onMessage,
+		peers:       make(map[string]*Peer),
+		localUUID:   localUUID,
+		onMessage:   onMessage,
+		readTimeout: readTimeout,
 	}
 }
 
 func (pm *PeerManager) Add(peer *Peer) {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
 	if existing, ok := pm.peers[peer.UUID]; ok {
 		existing.Conn.Close()
 	}
-
 	pm.peers[peer.UUID] = peer
+	// Release lock before starting goroutine to prevent deadlock
+	// if readLoop returns immediately (e.g. connection already closed)
+	pm.mu.Unlock()
+
 	go pm.readLoop(peer)
 	log.Printf("Peer connected: %s (%s)", peer.Hostname, peer.UUID)
 }
@@ -60,6 +64,10 @@ func (pm *PeerManager) Broadcast(msg Message) {
 		return
 	}
 	for _, p := range pm.peers {
+		if err := p.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			log.Printf("SetWriteDeadline to %s failed: %v", p.Hostname, err)
+			continue
+		}
 		if _, err := p.Conn.Write(data); err != nil {
 			log.Printf("Write to %s failed: %v", p.Hostname, err)
 		}
@@ -69,6 +77,12 @@ func (pm *PeerManager) Broadcast(msg Message) {
 func (pm *PeerManager) readLoop(peer *Peer) {
 	defer pm.disconnectPeer(peer)
 	for {
+		if pm.readTimeout > 0 {
+			if err := peer.Conn.SetReadDeadline(time.Now().Add(pm.readTimeout)); err != nil {
+				log.Printf("SetReadDeadline for %s failed: %v", peer.Hostname, err)
+				return
+			}
+		}
 		msg, err := Decode(peer.Conn)
 		if err != nil {
 			if err != io.EOF {

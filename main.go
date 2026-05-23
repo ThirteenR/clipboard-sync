@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -40,7 +41,7 @@ func main() {
 		if err := clipboard.Write(msg.Content); err != nil {
 			log.Printf("Failed to write clipboard: %v", err)
 		}
-	})
+	}, HeartbeatTimeout)
 
 	go func() {
 		w := clipboard.New(func(text string) {
@@ -67,7 +68,7 @@ func main() {
 	go func() {
 		handler := discovery.Handler{
 			OnJoin: func(info discovery.PeerInfo) {
-				if info.UUID == "" || info.UUID == deviceUUID {
+				if info.UUID == "" || info.UUID == deviceUUID || info.Addr == "" {
 					return
 				}
 				log.Printf("Discovered peer: %s (%s) at %s:%d", info.Hostname, info.UUID, info.Addr, info.Port)
@@ -157,7 +158,14 @@ func main() {
 }
 
 func loadOrCreateUUID() string {
-	return uuid.New().String()
+	uuidFile := filepath.Join(os.TempDir(), "clipboard-sync-uuid")
+	data, err := os.ReadFile(uuidFile)
+	if err == nil && len(data) > 0 {
+		return strings.TrimSpace(string(data))
+	}
+	id := uuid.New().String()
+	os.WriteFile(uuidFile, []byte(id), 0644)
+	return id
 }
 
 func truncate(s string, n int) string {

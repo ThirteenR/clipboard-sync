@@ -32,6 +32,8 @@ func Discover(ctx context.Context, handler Handler) error {
 	}
 
 	entries := make(chan *zeroconf.ServiceEntry)
+	defer close(entries)
+
 	go func() {
 		for entry := range entries {
 			if entry.Instance == "" {
@@ -60,7 +62,6 @@ func Discover(ctx context.Context, handler Handler) error {
 
 	err = resolver.Browse(ctx, "_clipboardsync._tcp", "local.", entries)
 	if err != nil {
-		close(entries)
 		return err
 	}
 

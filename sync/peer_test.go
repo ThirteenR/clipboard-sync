@@ -7,7 +7,7 @@ import (
 )
 
 func TestPeerManagerAddRemove(t *testing.T) {
-	pm := NewPeerManager("local-uuid", func(m Message) {})
+	pm := NewPeerManager("local-uuid", func(m Message) {}, 0)
 
 	server, client := net.Pipe()
 	defer server.Close()
@@ -33,7 +33,7 @@ func TestPeerManagerBroadcast(t *testing.T) {
 	received := make(chan Message, 1)
 	pm := NewPeerManager("local-uuid", func(m Message) {
 		received <- m
-	})
+	}, 0)
 
 	server, client := net.Pipe()
 	defer server.Close()
@@ -88,7 +88,7 @@ func TestPeerManagerIgnoresOwnMessage(t *testing.T) {
 	callCh := make(chan struct{}, 10)
 	pm := NewPeerManager("local-uuid", func(m Message) {
 		callCh <- struct{}{}
-	})
+	}, 0)
 
 	server, client := net.Pipe()
 	defer server.Close()
@@ -136,7 +136,7 @@ func TestPeerManagerIgnoresOwnMessage(t *testing.T) {
 }
 
 func TestPeerManagerDuplicateUUID(t *testing.T) {
-	pm := NewPeerManager("local-uuid", func(m Message) {})
+	pm := NewPeerManager("local-uuid", func(m Message) {}, 0)
 
 	// Add first peer with UUID "A"
 	s1, c1 := net.Pipe()
