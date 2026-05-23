@@ -77,6 +77,16 @@ func main() {
 					log.Printf("Failed to connect to %s: %v", info.Hostname, err)
 					return
 				}
+				// Send greeting so the receiving side can identify this peer
+				greeting := sync.Message{
+					ID:     uuid.New().String(),
+					Type:   "hello",
+					Sender: deviceUUID,
+				}
+				data, err := sync.Encode(greeting)
+				if err == nil {
+					conn.Write(data)
+				}
 				pm.Add(&sync.Peer{
 					UUID:     info.UUID,
 					Hostname: info.Hostname,
