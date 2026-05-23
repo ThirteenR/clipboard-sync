@@ -34,15 +34,6 @@ func TestSeen(t *testing.T) {
 	}
 }
 
-func TestMarkThenSeen(t *testing.T) {
-	d := New(5 * time.Minute)
-	h := d.Hash("content")
-	d.Mark(h)
-	if !d.Seen(h) {
-		t.Error("hash should be seen after Mark")
-	}
-}
-
 func TestMultipleItems(t *testing.T) {
 	d := New(5 * time.Minute)
 	a := d.Hash("a")
@@ -59,5 +50,19 @@ func TestMultipleItems(t *testing.T) {
 	d.Mark(b)
 	if !d.Seen(b) {
 		t.Error("b should be seen after Mark")
+	}
+}
+
+func TestTTLExpiry(t *testing.T) {
+	d := New(1 * time.Millisecond)
+	defer d.Stop()
+	h := d.Hash("expire-me")
+	d.Mark(h)
+	if !d.Seen(h) {
+		t.Fatal("hash should be seen immediately after Mark")
+	}
+	time.Sleep(10 * time.Millisecond)
+	if d.Seen(h) {
+		t.Error("hash should not be seen after TTL expiry")
 	}
 }

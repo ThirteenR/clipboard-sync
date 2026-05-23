@@ -8,18 +8,24 @@ import (
 )
 
 type Dedup struct {
-	mu    sync.RWMutex
-	items map[string]time.Time
-	ttl   time.Duration
+	mu     sync.RWMutex
+	items  map[string]time.Time
+	ttl    time.Duration
+	stopCh chan struct{}
 }
 
 func New(ttl time.Duration) *Dedup {
 	d := &Dedup{
-		items: make(map[string]time.Time),
-		ttl:   ttl,
+		items:  make(map[string]time.Time),
+		ttl:    ttl,
+		stopCh: make(chan struct{}),
 	}
 	go d.cleanupLoop()
 	return d
+}
+
+func (d *Dedup) Stop() {
+	close(d.stopCh)
 }
 
 func (d *Dedup) Hash(content string) string {
@@ -43,14 +49,19 @@ func (d *Dedup) Mark(hash string) {
 func (d *Dedup) cleanupLoop() {
 	ticker := time.NewTicker(d.ttl)
 	defer ticker.Stop()
-	for range ticker.C {
-		d.mu.Lock()
-		now := time.Now()
-		for k, v := range d.items {
-			if now.Sub(v) > d.ttl {
-				delete(d.items, k)
+	for {
+		select {
+		case <-ticker.C:
+			d.mu.Lock()
+			now := time.Now()
+			for k, v := range d.items {
+				if now.Sub(v) > d.ttl {
+					delete(d.items, k)
+				}
 			}
+			d.mu.Unlock()
+		case <-d.stopCh:
+			return
 		}
-		d.mu.Unlock()
 	}
 }
