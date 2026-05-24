@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"log"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -20,6 +21,7 @@ type Handler struct {
 
 func Register(ctx context.Context, instance, uuid, host string, port int) (*zeroconf.Server, error) {
 	txt := []string{"uuid=" + uuid}
+	log.Printf("Registering mDNS service: %s (%s) on %s:%d", instance, uuid, host, port)
 	return zeroconf.Register(instance, "_clipboardsync._tcp", "local.", port, txt, nil)
 }
 
@@ -30,6 +32,7 @@ func Discover(ctx context.Context, handler Handler) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("mDNS resolver created, browsing for _clipboardsync._tcp...")
 
 	entries := make(chan *zeroconf.ServiceEntry)
 	defer close(entries)
@@ -37,8 +40,11 @@ func Discover(ctx context.Context, handler Handler) error {
 	go func() {
 		for entry := range entries {
 			if entry.Instance == "" {
+				log.Printf("mDNS entry skipped (empty instance)")
 				continue
 			}
+			log.Printf("mDNS entry received: instance=%s host=%s addrs=%v port=%d txt=%v",
+				entry.Instance, entry.HostName, entry.AddrIPv4, entry.Port, entry.Text)
 			uuid := ""
 			for _, t := range entry.Text {
 				if len(t) > 5 && t[:5] == "uuid=" {
@@ -64,6 +70,7 @@ func Discover(ctx context.Context, handler Handler) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("mDNS Browse started successfully")
 
 	<-ctx.Done()
 	return nil
