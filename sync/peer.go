@@ -32,6 +32,11 @@ func NewPeerManager(localUUID string, onMessage func(Message), readTimeout time.
 }
 
 func (pm *PeerManager) Add(peer *Peer) {
+	if tcpConn, ok := peer.Conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
 	pm.mu.Lock()
 	if existing, ok := pm.peers[peer.UUID]; ok {
 		existing.Conn.Close()
@@ -53,6 +58,13 @@ func (pm *PeerManager) Remove(uuid string) {
 		delete(pm.peers, uuid)
 		log.Printf("Peer disconnected: %s", p.Hostname)
 	}
+}
+
+func (pm *PeerManager) Has(uuid string) bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	_, ok := pm.peers[uuid]
+	return ok
 }
 
 func (pm *PeerManager) Broadcast(msg Message) {

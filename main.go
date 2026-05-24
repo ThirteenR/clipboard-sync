@@ -41,7 +41,7 @@ func main() {
 		if err := clipboard.Write(msg.Content); err != nil {
 			log.Printf("Failed to write clipboard: %v", err)
 		}
-	}, HeartbeatTimeout)
+	}, 0)
 
 	go func() {
 		w := clipboard.New(func(text string) {
@@ -69,6 +69,39 @@ func main() {
 		handler := discovery.Handler{
 			OnJoin: func(info discovery.PeerInfo) {
 				if info.UUID == "" || info.UUID == deviceUUID || info.Addr == "" {
+					return
+				}
+				if pm.Has(info.UUID) {
+					return
+				}
+				// Lower UUID waits for higher UUID to connect.
+				// Fall back after 5s if the remote didn't discover us.
+				if deviceUUID < info.UUID {
+					log.Printf("Discovered %s (%s), waiting for inbound connection", info.Hostname, info.UUID)
+					go func(fi discovery.PeerInfo) {
+						time.Sleep(5 * time.Second)
+						if pm.Has(fi.UUID) {
+							return
+						}
+						log.Printf("Fallback: dialing %s (%s)", fi.Hostname, fi.UUID)
+						conn, err := net.DialTimeout("tcp", net.JoinHostPort(fi.Addr, itoa(fi.Port)), 5*time.Second)
+						if err != nil {
+							log.Printf("Fallback connect to %s failed: %v", fi.Hostname, err)
+							return
+						}
+						greeting := sync.Message{
+							ID:     uuid.New().String(),
+							Type:   "hello",
+							Sender: deviceUUID,
+						}
+						data, _ := sync.Encode(greeting)
+						conn.Write(data)
+						pm.Add(&sync.Peer{
+							UUID:     fi.UUID,
+							Hostname: fi.Hostname,
+							Conn:     conn,
+						})
+					}(info)
 					return
 				}
 				log.Printf("Discovered peer: %s (%s) at %s:%d", info.Hostname, info.UUID, info.Addr, info.Port)
@@ -120,13 +153,18 @@ func main() {
 				continue
 			}
 			go func(c net.Conn) {
-				defer c.Close()
 				msg, err := sync.Decode(c)
 				if err != nil {
 					log.Printf("Failed to decode greeting: %v", err)
+					c.Close()
 					return
 				}
 				if msg.Sender == deviceUUID {
+					c.Close()
+					return
+				}
+				if pm.Has(msg.Sender) {
+					c.Close()
 					return
 				}
 				pm.Add(&sync.Peer{
