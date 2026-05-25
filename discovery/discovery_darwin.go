@@ -11,6 +11,18 @@ import (
 	"time"
 )
 
+func registerDarwin(ctx context.Context, instance, uuid string, port int) (*RegisterHandle, error) {
+	rCtx, cancel := context.WithCancel(ctx)
+	cmd := exec.CommandContext(rCtx, "dns-sd", "-R", instance,
+		"_clipboardsync._tcp", "local.", itoa(port), "uuid="+uuid)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, err
+	}
+	log.Printf("dns-sd -R started for %s", instance)
+	return &RegisterHandle{cancel: cancel}, nil
+}
+
 func discoverDarwin(ctx context.Context, handler Handler) error {
 	instances := make(chan string, 10)
 
