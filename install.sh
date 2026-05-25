@@ -65,6 +65,14 @@ cmd_install() {
 
   mkdir -p "$(dirname "$PLIST_PATH")"
 
+  echo "  Creating config..."
+  CONFIG_DIR="$HOME/.config/clipboardsync"
+  mkdir -p "$CONFIG_DIR"
+  if [ ! -f "$CONFIG_DIR/trusted.json" ]; then
+    echo '{"trusted_uuids":[],"devices":{}}' > "$CONFIG_DIR/trusted.json"
+  fi
+  echo "  Run 'clipboardsync trust' to configure trusted devices."
+
   echo "  Writing plist..."
   cat > "$PLIST_PATH" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
