@@ -56,6 +56,12 @@ function Install-Service {
   }
   Write-Host "  Run 'clipboardsync trust' to configure trusted devices."
 
+  Write-Host "  Adding to PATH..."
+  $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if ($currentPath -notlike "*$BinDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$currentPath;$BinDir", "User")
+  }
+
   Write-Host "  Creating scheduled task (login trigger)..."
   $action = New-ScheduledTaskAction -Execute $BinPath
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME

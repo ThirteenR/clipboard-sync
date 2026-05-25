@@ -23,6 +23,12 @@ import (
 func main() {
 	log.SetFlags(log.Ltime | log.Lshortfile)
 
+	if len(os.Args) > 1 && os.Args[1] == "uuid" {
+		id := loadOrCreateUUID()
+		os.Stdout.WriteString(id + "\n")
+		return
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "trust" {
 		store, err := trust.New()
 		if err != nil {
