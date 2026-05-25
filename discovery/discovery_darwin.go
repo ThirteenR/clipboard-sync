@@ -3,6 +3,7 @@ package discovery
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -14,7 +15,7 @@ import (
 func registerDarwin(ctx context.Context, instance, uuid string, port int) (*RegisterHandle, error) {
 	rCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(rCtx, "dns-sd", "-R", instance,
-		"_clipboardsync._tcp", "local.", itoa(port), "uuid="+uuid)
+		"_clipboardsync._tcp", "local.", fmt.Sprintf("%d", port), "uuid="+uuid)
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, err
