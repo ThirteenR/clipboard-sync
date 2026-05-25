@@ -35,7 +35,6 @@ func Discover(ctx context.Context, handler Handler) error {
 	log.Printf("mDNS resolver created, browsing for _clipboardsync._tcp...")
 
 	entries := make(chan *zeroconf.ServiceEntry)
-	defer close(entries)
 
 	go func() {
 		for entry := range entries {

@@ -2,9 +2,12 @@ package clipboard
 
 import (
 	"context"
+	"errors"
 
 	"golang.design/x/clipboard"
 )
+
+var errUnavailable = errors.New("clipboard: write failed (unavailable)")
 
 type Watcher struct {
 	OnChange func(string)
@@ -48,6 +51,8 @@ func Write(text string) error {
 	if err := clipboard.Init(); err != nil {
 		return err
 	}
-	clipboard.Write(clipboard.FmtText, []byte(text))
+	if r := clipboard.Write(clipboard.FmtText, []byte(text)); r == nil {
+		return errUnavailable
+	}
 	return nil
 }
