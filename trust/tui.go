@@ -1,113 +1,78 @@
 package trust
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
 	"clipboard-sync/discovery"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
-type uiEntry struct {
+type entry struct {
 	uuid     string
 	hostname string
 	trusted  bool
 }
 
-func RunTUI(store *TrustStore) {
-	fmt.Println("Clipboard Sync - Trusted Devices")
-	fmt.Println()
+type model struct {
+	entries  []entry
+	cursor   int
+	loading  bool
+	err      error
+	store    *TrustStore
+	saved    bool
+	quitting bool
+}
 
-	entries := discoverEntries(store)
-	if len(entries) == 0 {
-		fmt.Println("No devices found on LAN.")
-		fmt.Println()
-		waitForExit()
-		return
-	}
+type discoveryDoneMsg struct {
+	entries []entry
+	err     error
+}
 
-	scanner := bufio.NewScanner(os.Stdin)
-	for {
-		printEntries(entries)
-		fmt.Println()
-		fmt.Print("Enter number to toggle, 's' save, 'q' quit: ")
-
-		if !scanner.Scan() {
-			break
-		}
-		line := strings.TrimSpace(scanner.Text())
-		switch line {
-		case "q", "quit":
-			return
-		case "s", "save":
-			saveEntries(store, entries)
-			fmt.Println("Saved.")
-			return
-		default:
-			var n int
-			if _, err := fmt.Sscanf(line, "%d", &n); err == nil && n >= 1 && n <= len(entries) {
-				entries[n-1].trusted = !entries[n-1].trusted
-			}
-		}
+func initialModel(store *TrustStore) model {
+	return model{
+		loading: true,
+		store:   store,
 	}
 }
 
-func printEntries(entries []uiEntry) {
-	for i, e := range entries {
-		check := " "
-		if e.trusted {
-			check = "*"
-		}
-		fmt.Printf("  %2d. [%s] %s  (%s)\n", i+1, check, e.hostname, e.uuid)
-	}
+func (m model) Init() tea.Cmd {
+	return m.discover
 }
 
-func saveEntries(store *TrustStore, entries []uiEntry) {
-	for _, e := range entries {
-		if e.trusted {
-			store.Add(e.uuid, e.hostname)
-		} else {
-			store.Remove(e.uuid)
-		}
-	}
-}
-
-func discoverEntries(store *TrustStore) []uiEntry {
+func (m model) discover() tea.Msg {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	seen := make(map[string]bool)
-	var entries []uiEntry
+	var entries []entry
 
-	fmt.Print("Searching for devices on LAN...")
 	handler := discovery.Handler{
 		OnJoin: func(info discovery.PeerInfo) {
 			if info.UUID == "" || seen[info.UUID] {
 				return
 			}
 			seen[info.UUID] = true
-			trusted := store.IsTrusted(info.UUID)
-			entries = append(entries, uiEntry{
+			trusted := m.store.IsTrusted(info.UUID)
+			entries = append(entries, entry{
 				uuid:     info.UUID,
 				hostname: info.Hostname,
 				trusted:  trusted,
 			})
-			fmt.Print(".")
 		},
 	}
 
 	if err := discovery.Discover(ctx, handler); err != nil {
-		log.Printf("Discovery error: %v", err)
+		return discoveryDoneMsg{err: err}
 	}
-	fmt.Println(" done")
 
-	for _, de := range store.List() {
+	for _, de := range m.store.List() {
 		if !seen[de.UUID] {
-			entries = append(entries, uiEntry{
+			entries = append(entries, entry{
 				uuid:     de.UUID,
 				hostname: de.Hostname,
 				trusted:  de.Trusted,
@@ -115,12 +80,95 @@ func discoverEntries(store *TrustStore) []uiEntry {
 		}
 	}
 
-	return entries
+	return discoveryDoneMsg{entries: entries}
 }
 
-func waitForExit() {
-	fmt.Print("Press Enter to exit.")
-	bufio.NewScanner(os.Stdin).Scan()
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+		case "s":
+			m.save()
+			m.saved = true
+			return m, tea.Quit
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.entries)-1 {
+				m.cursor++
+			}
+		case " ":
+			if m.cursor >= 0 && m.cursor < len(m.entries) {
+				m.entries[m.cursor].trusted = !m.entries[m.cursor].trusted
+			}
+		}
+	case discoveryDoneMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.entries = msg.entries
+		}
+	case tea.WindowSizeMsg:
+		// no special handling needed
+	}
+	return m, nil
+}
+
+func (m model) save() {
+	for _, e := range m.entries {
+		if e.trusted {
+			m.store.Add(e.uuid, e.hostname)
+		} else {
+			m.store.Remove(e.uuid)
+		}
+	}
+}
+
+func (m model) View() string {
+	if m.saved {
+		return "Saved.\n"
+	}
+	if m.quitting {
+		return ""
+	}
+	if m.loading {
+		return " Searching for devices on LAN...\n\n Press q to quit."
+	}
+	if m.err != nil {
+		return fmt.Sprintf("Error: %v\n\n Press q to quit.", m.err)
+	}
+	if len(m.entries) == 0 {
+		return "No devices found on LAN.\n\n Press q to quit."
+	}
+
+	var b strings.Builder
+	b.WriteString("Clipboard Sync - Trusted Devices\n\n")
+	for i, e := range m.entries {
+		cursor := "  "
+		if i == m.cursor {
+			cursor = "> "
+		}
+		check := " "
+		if e.trusted {
+			check = "x"
+		}
+		b.WriteString(fmt.Sprintf("%s[%s] %s  (%s)\n", cursor, check, e.hostname, e.uuid))
+	}
+	b.WriteString("\n \x1b[90mup/down navigate\x1b[0m  \x1b[90mspace toggle\x1b[0m  \x1b[90ms save\x1b[0m  \x1b[90mq quit\x1b[0m")
+	return b.String()
+}
+
+func RunTUI(store *TrustStore) {
+	p := tea.NewProgram(initialModel(store))
+	if _, err := p.Run(); err != nil {
+		log.Fatalf("TUI failed: %v", err)
+	}
 }
 
 func RunList(store *TrustStore) {
