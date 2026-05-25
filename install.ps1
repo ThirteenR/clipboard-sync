@@ -47,6 +47,15 @@ function Install-Service {
   $null = New-Item -ItemType Directory -Force -Path $BinDir
   Copy-Item -Path $src -Destination $BinPath -Force
 
+  Write-Host "  Creating config..."
+  $configDir = "$env:APPDATA\clipboardsync"
+  $null = New-Item -ItemType Directory -Force -Path $configDir
+  $configFile = "$configDir\trusted.json"
+  if (-not (Test-Path $configFile)) {
+    Set-Content $configFile '{"trusted_uuids":[],"devices":{}}'
+  }
+  Write-Host "  Run 'clipboardsync trust' to configure trusted devices."
+
   Write-Host "  Creating scheduled task (login trigger)..."
   $action = New-ScheduledTaskAction -Execute $BinPath
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
