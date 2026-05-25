@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"runtime"
 
@@ -20,14 +21,38 @@ type Handler struct {
 	OnLeave func(PeerInfo)
 }
 
-func Register(ctx context.Context, instance, uuid, host string, port int) (*zeroconf.Server, error) {
-	txt := []string{"uuid=" + uuid}
-	log.Printf("Registering mDNS service: %s (%s) on %s:%d", instance, uuid, host, port)
-	return zeroconf.Register(instance, "_clipboardsync._tcp", "local.", port, txt, nil)
+type RegisterHandle struct {
+	cancel context.CancelFunc
 }
 
-// Discover continuously browses for _clipboardsync._tcp services.
-// Blocks until ctx is cancelled. Calls handler.OnJoin as peers appear.
+func (h *RegisterHandle) Shutdown() {
+	if h.cancel != nil {
+		h.cancel()
+	}
+}
+
+func Register(ctx context.Context, instance, uuid, host string, port int) (*RegisterHandle, error) {
+	log.Printf("Registering mDNS service: %s (%s) on %s:%d", instance, uuid, host, port)
+	if runtime.GOOS == "darwin" {
+		return registerDarwin(ctx, instance, uuid, port)
+	}
+	return registerZeroconf(ctx, instance, uuid, host, port)
+}
+
+func registerZeroconf(ctx context.Context, instance, uuid, host string, port int) (*RegisterHandle, error) {
+	txt := []string{"uuid=" + uuid}
+	srv, err := zeroconf.Register(instance, "_clipboardsync._tcp", "local.", port, txt, nil)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown()
+	}()
+	return &RegisterHandle{cancel: cancel}, nil
+}
+
 func Discover(ctx context.Context, handler Handler) error {
 	if runtime.GOOS == "darwin" {
 		return discoverDarwin(ctx, handler)
@@ -81,4 +106,8 @@ func discoverZeroconf(ctx context.Context, handler Handler) error {
 
 	<-ctx.Done()
 	return nil
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }
