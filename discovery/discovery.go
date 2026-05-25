@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"log"
+	"runtime"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -28,6 +29,13 @@ func Register(ctx context.Context, instance, uuid, host string, port int) (*zero
 // Discover continuously browses for _clipboardsync._tcp services.
 // Blocks until ctx is cancelled. Calls handler.OnJoin as peers appear.
 func Discover(ctx context.Context, handler Handler) error {
+	if runtime.GOOS == "darwin" {
+		return discoverDarwin(ctx, handler)
+	}
+	return discoverZeroconf(ctx, handler)
+}
+
+func discoverZeroconf(ctx context.Context, handler Handler) error {
 	resolver, err := zeroconf.NewResolver(nil)
 	if err != nil {
 		return err
