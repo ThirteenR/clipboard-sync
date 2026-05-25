@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -194,11 +195,65 @@ func RunTUI(store *TrustStore) {
 }
 
 func RunList(store *TrustStore) {
-	for _, e := range store.List() {
-		trusted := " "
-		if e.Trusted {
-			trusted = "*"
-		}
-		fmt.Printf("[%s] %s  (%s)  last seen: %s\n", trusted, e.Hostname, e.UUID, e.LastSeen)
+	type device struct {
+		hostname string
+		uuid     string
+		trusted  bool
+		seen     string
 	}
+	seen := make(map[string]bool)
+	var devices []device
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	fmt.Fprint(os.Stderr, "Searching for devices...")
+	discovery.Discover(ctx, discovery.Handler{
+		OnJoin: func(info discovery.PeerInfo) {
+			if info.UUID == "" || seen[info.UUID] {
+				return
+			}
+			seen[info.UUID] = true
+			trusted := store.IsTrusted(info.UUID)
+			devices = append(devices, device{
+				uuid:     info.UUID,
+				hostname: info.Hostname,
+				trusted:  trusted,
+				seen:     time.Now().Format(time.RFC3339),
+			})
+			fmt.Fprint(os.Stderr, ".")
+		},
+	})
+	fmt.Fprintln(os.Stderr, " done")
+
+	for _, de := range store.List() {
+		if !seen[de.UUID] {
+			devices = append(devices, device{
+				uuid:     de.UUID,
+				hostname: de.Hostname,
+				trusted:  de.Trusted,
+				seen:     de.LastSeen,
+			})
+		}
+	}
+
+	if len(devices) == 0 {
+		fmt.Println("No devices found on LAN.")
+		return
+	}
+
+	fmt.Println()
+	for _, d := range devices {
+		check := " "
+		if d.trusted {
+			check = "*"
+		}
+		fmt.Printf("  [%s] %s  (%s)", check, d.hostname, d.uuid)
+		if !d.trusted {
+			fmt.Print("  (untrusted)")
+		}
+		fmt.Println()
+	}
+	fmt.Println()
+	fmt.Println("Run 'clipboardsync trust add <uuid>' to trust a device.")
 }
