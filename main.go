@@ -15,24 +15,81 @@ import (
 	"clipboard-sync/dedup"
 	"clipboard-sync/discovery"
 	"clipboard-sync/sync"
+	"clipboard-sync/trust"
 
 	"github.com/google/uuid"
 )
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lshortfile)
+
+	if len(os.Args) > 1 && os.Args[1] == "trust" {
+		store, err := trust.New()
+		if err != nil {
+			log.Fatalf("Failed to load trust store: %v", err)
+		}
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "list":
+				trust.RunList(store)
+			case "add":
+				if len(os.Args) < 4 {
+					log.Fatal("Usage: clipboardsync trust add <uuid>")
+				}
+				store.Add(os.Args[3], os.Args[3])
+				log.Printf("Added %s to trusted devices", os.Args[3])
+			case "remove":
+				if len(os.Args) < 4 {
+					log.Fatal("Usage: clipboardsync trust remove <uuid>")
+				}
+				store.Remove(os.Args[3])
+				log.Printf("Removed %s from trusted devices", os.Args[3])
+			default:
+				log.Fatalf("Unknown trust subcommand: %s", os.Args[2])
+			}
+		} else {
+			trust.RunTUI(store)
+		}
+		return
+	}
+
 	log.Println("Clipboard Sync starting...")
 
 	deviceUUID := loadOrCreateUUID()
 	log.Printf("Device UUID: %s", deviceUUID)
 
+	trustStore, err := trust.New()
+	if err != nil {
+		log.Fatalf("Failed to load trust store: %v", err)
+	}
+	log.Printf("Trust store loaded")
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := trustStore.ReloadIfChanged(); err != nil && !os.IsNotExist(err) {
+					log.Printf("Trust store reload error: %v", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	deduper := dedup.New(DedupTTL)
 	defer deduper.Stop()
 
 	pm := sync.NewPeerManager(deviceUUID, func(msg sync.Message) {
+		if !trustStore.IsTrusted(msg.Sender) {
+			log.Printf("Skipped clipboard from untrusted device: %s", truncate(msg.Sender, 16))
+			return
+		}
 		if deduper.Seen(msg.Hash) {
 			return
 		}
