@@ -3,6 +3,7 @@ package discovery
 import (
 	"bufio"
 	"context"
+	"io"
 	"log"
 	"net"
 	"os/exec"
@@ -14,7 +15,9 @@ func discoverDarwin(ctx context.Context, handler Handler) error {
 	instances := make(chan string, 10)
 
 	go func() {
-		cmd := exec.CommandContext(ctx, "dns-sd", "-B", "_clipboardsync._tcp", "local.")
+		cmd := exec.CommandContext(ctx, "script", "-q", "/dev/null",
+			"dns-sd", "-B", "_clipboardsync._tcp", "local.")
+		stdout, _ := cmd.StdoutPipe()
 		stderr, _ := cmd.StderrPipe()
 		if err := cmd.Start(); err != nil {
 			log.Printf("dns-sd -B start error: %v", err)
@@ -23,9 +26,9 @@ func discoverDarwin(ctx context.Context, handler Handler) error {
 		}
 		log.Printf("dns-sd -B started for _clipboardsync._tcp")
 
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
+		merged := bufio.NewScanner(io.MultiReader(stdout, stderr))
+		for merged.Scan() {
+			line := merged.Text()
 			log.Printf("dns-sd -B line: %s", line)
 			if !strings.Contains(line, "_clipboardsync._tcp") {
 				continue
@@ -40,7 +43,7 @@ func discoverDarwin(ctx context.Context, handler Handler) error {
 				instances <- inst
 			}
 		}
-		log.Printf("dns-sd -B scanner done: %v", scanner.Err())
+		log.Printf("dns-sd -B scanner done: %v", merged.Err())
 		cmd.Wait()
 		close(instances)
 	}()
@@ -59,22 +62,25 @@ func discoverDarwin(ctx context.Context, handler Handler) error {
 }
 
 func resolveInstance(instance string, handler Handler) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "dns-sd", "-L", instance, "_clipboardsync._tcp", "local.")
+	cmd := exec.CommandContext(ctx, "script", "-q", "/dev/null",
+		"dns-sd", "-L", instance, "_clipboardsync._tcp", "local.")
+	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
+		log.Printf("dns-sd -L start error: %v", err)
 		return
 	}
 
 	var hostname, uuidStr string
 	port := 8920
 
-	scanner := bufio.NewScanner(stderr)
-	for scanner.Scan() {
-		line := scanner.Text()
+	merged := bufio.NewScanner(io.MultiReader(stdout, stderr))
+	for merged.Scan() {
+		line := merged.Text()
 		if strings.Contains(line, "uuid=") {
 			idx := strings.Index(line, "uuid=")
 			uuidStr = strings.TrimSpace(line[idx+5:])
@@ -92,6 +98,7 @@ func resolveInstance(instance string, handler Handler) {
 	cmd.Wait()
 
 	if uuidStr == "" || hostname == "" {
+		log.Printf("dns-sd -L resolve failed for %s: uuid=%q hostname=%q", instance, uuidStr, hostname)
 		return
 	}
 
