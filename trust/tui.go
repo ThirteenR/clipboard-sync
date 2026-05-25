@@ -19,13 +19,13 @@ type entry struct {
 }
 
 type model struct {
-	entries  []entry
-	cursor   int
-	loading  bool
-	err      error
-	store    *TrustStore
-	saved    bool
-	quitting bool
+	entries    []entry
+	cursor     int
+	discovering bool
+	discoveryErr error
+	store      *TrustStore
+	saved      bool
+	quitting   bool
 }
 
 type discoveryDoneMsg struct {
@@ -34,10 +34,24 @@ type discoveryDoneMsg struct {
 }
 
 func initialModel(store *TrustStore) model {
+	entries := storedEntries(store)
 	return model{
-		loading: true,
-		store:   store,
+		entries:     entries,
+		discovering: true,
+		store:       store,
 	}
+}
+
+func storedEntries(store *TrustStore) []entry {
+	var entries []entry
+	for _, de := range store.List() {
+		entries = append(entries, entry{
+			uuid:     de.UUID,
+			hostname: de.Hostname,
+			trusted:  de.Trusted,
+		})
+	}
+	return entries
 }
 
 func (m model) Init() tea.Cmd {
@@ -45,7 +59,7 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) discover() tea.Msg {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	seen := make(map[string]bool)
@@ -94,6 +108,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.save()
 			m.saved = true
 			return m, tea.Quit
+		case "r":
+			m.discovering = true
+			m.discoveryErr = nil
+			return m, m.discover
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -108,14 +126,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case discoveryDoneMsg:
-		m.loading = false
+		m.discovering = false
 		if msg.err != nil {
-			m.err = msg.err
+			m.discoveryErr = msg.err
 		} else {
 			m.entries = msg.entries
 		}
 	case tea.WindowSizeMsg:
-		// no special handling needed
 	}
 	return m, nil
 }
@@ -137,30 +154,35 @@ func (m model) View() string {
 	if m.quitting {
 		return ""
 	}
-	if m.loading {
-		return " Searching for devices on LAN...\n\n Press q to quit."
-	}
-	if m.err != nil {
-		return fmt.Sprintf("Error: %v\n\n Press q to quit.", m.err)
-	}
-	if len(m.entries) == 0 {
-		return "No devices found on LAN.\n\n Press q to quit."
-	}
 
 	var b strings.Builder
 	b.WriteString("Clipboard Sync - Trusted Devices\n\n")
-	for i, e := range m.entries {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
+
+	if len(m.entries) == 0 && !m.discovering {
+		b.WriteString("No devices found on LAN.\n")
+	} else {
+		for i, e := range m.entries {
+			cursor := "  "
+			if i == m.cursor {
+				cursor = "> "
+			}
+			check := " "
+			if e.trusted {
+				check = "x"
+			}
+			b.WriteString(fmt.Sprintf("%s[%s] %s  (%s)\n", cursor, check, e.hostname, e.uuid))
 		}
-		check := " "
-		if e.trusted {
-			check = "x"
-		}
-		b.WriteString(fmt.Sprintf("%s[%s] %s  (%s)\n", cursor, check, e.hostname, e.uuid))
 	}
-	b.WriteString("\n \x1b[90mup/down navigate\x1b[0m  \x1b[90mspace toggle\x1b[0m  \x1b[90ms save\x1b[0m  \x1b[90mq quit\x1b[0m")
+
+	if m.discovering {
+		b.WriteString("\n Searching for devices on LAN... (8s)")
+	}
+	if m.discoveryErr != nil {
+		b.WriteString(fmt.Sprintf("\n Discovery error: %v", m.discoveryErr))
+	}
+
+	b.WriteString("\n")
+	b.WriteString("\n \x1b[90mup/down\x1b[0m  \x1b[90mspace toggle\x1b[0m  \x1b[90ms save\x1b[0m  \x1b[90mr rediscover\x1b[0m  \x1b[90mq quit\x1b[0m")
 	return b.String()
 }
 
