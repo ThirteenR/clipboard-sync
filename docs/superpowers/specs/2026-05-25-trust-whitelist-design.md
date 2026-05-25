@@ -83,6 +83,10 @@ mDNS发现 → 连接 → readLoop → onMessage
     → 否: log.Printf("skipped untrusted device %s", ...)
 ```
 
+## 配置重载
+
+TUI 修改 `trusted.json` 后，daemon 通过轮询文件修改时间（每 30 秒检查一次，使用 `os.Stat`）自动重载，无需重启。首次加载在 `main()` 启动时完成。
+
 ## 安装
 
 安装脚本新增步骤：创建配置目录、写入默认 `trusted.json`。
