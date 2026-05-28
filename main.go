@@ -91,20 +91,7 @@ func main() {
 	deduper := dedup.New(DedupTTL)
 	defer deduper.Stop()
 
-	pm := sync.NewPeerManager(deviceUUID, func(msg sync.Message) {
-		if !trustStore.IsTrusted(msg.Sender) {
-			log.Printf("Skipped clipboard from untrusted device: %s", truncate(msg.Sender, 16))
-			return
-		}
-		if deduper.Seen(msg.Hash) {
-			return
-		}
-		deduper.Mark(msg.Hash)
-		log.Printf("Received clipboard from %s: %s", msg.Sender, truncate(msg.Content, 50))
-		if err := clipboard.Write(msg.Content); err != nil {
-			log.Printf("Failed to write clipboard: %v", err)
-		}
-	}, 0)
+	pm := sync.NewPeerManager()
 
 	go func() {
 		w := clipboard.New(func(text string) {
@@ -113,15 +100,21 @@ func main() {
 				return
 			}
 			deduper.Mark(hash)
-			log.Printf("Local clipboard changed, broadcasting...")
-			pm.Broadcast(sync.Message{
+			log.Printf("Local clipboard changed, broadcasting to %d peers...", pm.Len())
+
+			msg := sync.Message{
 				ID:        uuid.New().String(),
 				Hash:      hash,
 				Type:      "clipboard",
 				Content:   text,
 				Timestamp: time.Now().UnixMilli(),
 				Sender:    deviceUUID,
-			})
+			}
+			data, _ := sync.Encode(msg)
+
+			for _, peer := range pm.All() {
+				go sendToPeer(peer, data)
+			}
 		})
 		if err := w.Start(ctx); err != nil {
 			log.Fatalf("Clipboard watcher failed: %v", err)
@@ -134,60 +127,11 @@ func main() {
 				if info.UUID == "" || info.UUID == deviceUUID || info.Addr == "" {
 					return
 				}
-				if pm.Has(info.UUID) {
-					return
-				}
-				// Lower UUID waits for higher UUID to connect.
-				// Fall back after 5s if the remote didn't discover us.
-				if deviceUUID < info.UUID {
-					log.Printf("Discovered %s (%s), waiting for inbound connection", info.Hostname, info.UUID)
-					go func(fi discovery.PeerInfo) {
-						time.Sleep(5 * time.Second)
-						if pm.Has(fi.UUID) {
-							return
-						}
-						log.Printf("Fallback: dialing %s (%s)", fi.Hostname, fi.UUID)
-						conn, err := net.DialTimeout("tcp", net.JoinHostPort(fi.Addr, itoa(fi.Port)), 5*time.Second)
-						if err != nil {
-							log.Printf("Fallback connect to %s failed: %v", fi.Hostname, err)
-							return
-						}
-						greeting := sync.Message{
-							ID:     uuid.New().String(),
-							Type:   "hello",
-							Sender: deviceUUID,
-						}
-						data, _ := sync.Encode(greeting)
-						conn.Write(data)
-						pm.Add(&sync.Peer{
-							UUID:     fi.UUID,
-							Hostname: fi.Hostname,
-							Conn:     conn,
-						})
-					}(info)
-					return
-				}
-				log.Printf("Discovered peer: %s (%s) at %s:%d", info.Hostname, info.UUID, info.Addr, info.Port)
-
-				conn, err := net.DialTimeout("tcp", net.JoinHostPort(info.Addr, itoa(info.Port)), 5*time.Second)
-				if err != nil {
-					log.Printf("Failed to connect to %s: %v", info.Hostname, err)
-					return
-				}
-				// Send greeting so the receiving side can identify this peer
-				greeting := sync.Message{
-					ID:     uuid.New().String(),
-					Type:   "hello",
-					Sender: deviceUUID,
-				}
-				data, err := sync.Encode(greeting)
-				if err == nil {
-					conn.Write(data)
-				}
-				pm.Add(&sync.Peer{
+				pm.Add(sync.PeerInfo{
 					UUID:     info.UUID,
 					Hostname: info.Hostname,
-					Conn:     conn,
+					Addr:     info.Addr,
+					Port:     info.Port,
 				})
 			},
 			OnLeave: func(info discovery.PeerInfo) {
@@ -215,27 +159,7 @@ func main() {
 				log.Printf("Accept error: %v", err)
 				continue
 			}
-			go func(c net.Conn) {
-				msg, err := sync.Decode(c)
-				if err != nil {
-					log.Printf("Failed to decode greeting: %v", err)
-					c.Close()
-					return
-				}
-				if msg.Sender == deviceUUID {
-					c.Close()
-					return
-				}
-				if pm.Has(msg.Sender) {
-					c.Close()
-					return
-				}
-				pm.Add(&sync.Peer{
-					UUID:     msg.Sender,
-					Hostname: msg.Sender,
-					Conn:     c,
-				})
-			}(conn)
+			go handleInbound(conn, deviceUUID, trustStore, deduper)
 		}
 	}()
 
@@ -288,4 +212,67 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+func sendToPeer(peer sync.PeerInfo, data []byte) {
+	addr := net.JoinHostPort(peer.Addr, itoa(peer.Port))
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		log.Printf("Failed to connect to %s (%s): %v", peer.Hostname, peer.UUID, err)
+		return
+	}
+	defer conn.Close()
+
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
+	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		log.Printf("SetWriteDeadline to %s failed: %v", peer.Hostname, err)
+		return
+	}
+	if _, err := conn.Write(data); err != nil {
+		log.Printf("Write to %s failed: %v", peer.Hostname, err)
+	}
+}
+
+func handleInbound(conn net.Conn, deviceUUID string, trustStore *trust.TrustStore, deduper *dedup.Dedup) {
+	defer conn.Close()
+
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
+	msg, err := sync.Decode(conn)
+	if err != nil {
+		log.Printf("Failed to decode message: %v", err)
+		return
+	}
+
+	if msg.Sender == deviceUUID {
+		return
+	}
+
+	if !trustStore.IsTrusted(msg.Sender) {
+		log.Printf("Skipped message from untrusted device: %s", truncate(msg.Sender, 16))
+		return
+	}
+
+	if msg.Type == "hello" {
+		log.Printf("Received hello from %s", msg.Sender)
+		return
+	}
+
+	if msg.Type == "clipboard" {
+		if deduper.Seen(msg.Hash) {
+			return
+		}
+		deduper.Mark(msg.Hash)
+		log.Printf("Received clipboard from %s: %s", msg.Sender, truncate(msg.Content, 50))
+		if err := clipboard.Write(msg.Content); err != nil {
+			log.Printf("Failed to write clipboard: %v", err)
+		}
+	}
 }
