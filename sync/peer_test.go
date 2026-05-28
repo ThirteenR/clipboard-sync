@@ -1,157 +1,76 @@
 package sync
 
 import (
-	"net"
 	"testing"
-	"time"
 )
 
 func TestPeerManagerAddRemove(t *testing.T) {
-	pm := NewPeerManager("local-uuid", func(m Message) {}, 0)
+	pm := NewPeerManager()
 
-	server, client := net.Pipe()
-	defer server.Close()
-
-	peer := &Peer{
-		UUID:     "peer-uuid",
-		Hostname: "test-peer",
-		Conn:     client,
-	}
-
-	pm.Add(peer)
-	if len(pm.List()) != 1 {
-		t.Errorf("expected 1 peer, got %d", len(pm.List()))
+	pm.Add(PeerInfo{UUID: "peer-uuid", Hostname: "test-peer", Addr: "192.168.1.1", Port: 8920})
+	if pm.Len() != 1 {
+		t.Errorf("expected 1 peer, got %d", pm.Len())
 	}
 
 	pm.Remove("peer-uuid")
-	if len(pm.List()) != 0 {
-		t.Errorf("expected 0 peers, got %d", len(pm.List()))
+	if pm.Len() != 0 {
+		t.Errorf("expected 0 peers, got %d", pm.Len())
 	}
 }
 
-func TestPeerManagerBroadcast(t *testing.T) {
-	received := make(chan Message, 1)
-	pm := NewPeerManager("local-uuid", func(m Message) {
-		received <- m
-	}, 0)
+func TestPeerManagerHas(t *testing.T) {
+	pm := NewPeerManager()
 
-	server, client := net.Pipe()
-	defer server.Close()
-
-	peer := &Peer{
-		UUID:     "peer-uuid",
-		Hostname: "test-peer",
-		Conn:     client,
+	if pm.Has("nonexistent") {
+		t.Error("expected Has to return false for nonexistent peer")
 	}
 
-	pm.Add(peer)
-
-	// Give readLoop time to start
-	time.Sleep(50 * time.Millisecond)
-
-	msg := Message{
-		ID:      "msg-1",
-		Type:    "clipboard",
-		Content: "test broadcast",
-		Sender:  "local-uuid",
+	pm.Add(PeerInfo{UUID: "peer-uuid", Hostname: "test-peer", Addr: "192.168.1.1", Port: 8920})
+	if !pm.Has("peer-uuid") {
+		t.Error("expected Has to return true for existing peer")
 	}
-
-	// Start reading from server side before broadcasting, because
-	// net.Pipe uses unbuffered channels: client.Write blocks until
-	// server.Read receives.
-	type readResult struct {
-		data []byte
-		err  error
-	}
-	serverResult := make(chan readResult, 1)
-	go func() {
-		data := make([]byte, 4096)
-		n, err := server.Read(data)
-		serverResult <- readResult{data[:n], err}
-	}()
-
-	pm.Broadcast(msg)
-
-	rr := <-serverResult
-	if rr.err != nil {
-		t.Fatalf("server read failed: %v", rr.err)
-	}
-
-	if len(rr.data) <= 4 {
-		t.Fatalf("message too short: %d bytes", len(rr.data))
-	}
-
-	t.Logf("Broadcast message sent successfully, %d bytes", len(rr.data))
 }
 
-func TestPeerManagerIgnoresOwnMessage(t *testing.T) {
-	callCh := make(chan struct{}, 10)
-	pm := NewPeerManager("local-uuid", func(m Message) {
-		callCh <- struct{}{}
-	}, 0)
+func TestPeerManagerGet(t *testing.T) {
+	pm := NewPeerManager()
 
-	server, client := net.Pipe()
-	defer server.Close()
-
-	peer := &Peer{
-		UUID:     "peer-uuid",
-		Hostname: "test-peer",
-		Conn:     server,
+	pm.Add(PeerInfo{UUID: "peer-uuid", Hostname: "test-peer", Addr: "192.168.1.1", Port: 8920})
+	info, ok := pm.Get("peer-uuid")
+	if !ok {
+		t.Fatal("expected Get to return true")
 	}
-
-	pm.Add(peer)
-
-	// Send a message FROM local-uuid — should be ignored
-	msg := Message{
-		ID:     "self-msg",
-		Type:   "clipboard",
-		Sender: "local-uuid",
+	if info.Hostname != "test-peer" {
+		t.Errorf("expected hostname 'test-peer', got '%s'", info.Hostname)
 	}
-	data, _ := Encode(msg)
-	client.Write(data)
-
-	time.Sleep(50 * time.Millisecond)
-
-	select {
-	case <-callCh:
-		t.Error("own message should be ignored, got a callback")
-	default:
+	if info.Addr != "192.168.1.1" {
+		t.Errorf("expected addr '192.168.1.1', got '%s'", info.Addr)
 	}
+}
 
-	// Send a message FROM another peer — should trigger callback
-	msg2 := Message{
-		ID:     "remote-msg",
-		Type:   "clipboard",
-		Sender: "other-uuid",
-	}
-	data2, _ := Encode(msg2)
-	client.Write(data2)
+func TestPeerManagerAll(t *testing.T) {
+	pm := NewPeerManager()
 
-	select {
-	case <-callCh:
-		// expected
-	case <-time.After(100 * time.Millisecond):
-		t.Error("expected callback for remote message, got none")
+	pm.Add(PeerInfo{UUID: "a", Hostname: "peer-a", Addr: "10.0.0.1", Port: 8920})
+	pm.Add(PeerInfo{UUID: "b", Hostname: "peer-b", Addr: "10.0.0.2", Port: 8920})
+
+	all := pm.All()
+	if len(all) != 2 {
+		t.Errorf("expected 2 peers, got %d", len(all))
 	}
 }
 
 func TestPeerManagerDuplicateUUID(t *testing.T) {
-	pm := NewPeerManager("local-uuid", func(m Message) {}, 0)
+	pm := NewPeerManager()
 
-	// Add first peer with UUID "A"
-	s1, c1 := net.Pipe()
-	defer s1.Close()
-	pm.Add(&Peer{UUID: "A", Hostname: "peer1", Conn: c1})
+	pm.Add(PeerInfo{UUID: "A", Hostname: "peer1", Addr: "10.0.0.1", Port: 8920})
+	pm.Add(PeerInfo{UUID: "A", Hostname: "peer2", Addr: "10.0.0.2", Port: 8920})
 
-	// Add second peer with same UUID "A"
-	s2, c2 := net.Pipe()
-	defer s2.Close()
-	pm.Add(&Peer{UUID: "A", Hostname: "peer2", Conn: c2})
+	if pm.Len() != 1 {
+		t.Errorf("expected 1 peer after duplicate, got %d", pm.Len())
+	}
 
-	time.Sleep(50 * time.Millisecond)
-
-	peers := pm.List()
-	if len(peers) != 1 {
-		t.Errorf("expected 1 peer after duplicate, got %d: %+v", len(peers), peers)
+	info, _ := pm.Get("A")
+	if info.Hostname != "peer2" {
+		t.Errorf("expected hostname 'peer2' (latest), got '%s'", info.Hostname)
 	}
 }
