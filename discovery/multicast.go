@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -79,15 +80,25 @@ func newSenderConn(addr *net.UDPAddr) *net.UDPConn {
 	return conn
 }
 
+func newReceiverConn(addr *net.UDPAddr) *net.UDPConn {
+	conn, err := net.ListenMulticastUDP("udp", nil, addr)
+	if err != nil {
+		log.Printf("multicast receiver socket creation failed: %v", err)
+		return nil
+	}
+	conn.SetReadBuffer(1024 * 1024)
+	return conn
+}
+
 func multicastDiscover(ctx context.Context, handler Handler) error {
 	addr, err := net.ResolveUDPAddr("udp", multicastAddr)
 	if err != nil {
 		return err
 	}
 
-	conn, err := net.ListenMulticastUDP("udp", nil, addr)
-	if err != nil {
-		return err
+	conn := newReceiverConn(addr)
+	if conn == nil {
+		return fmt.Errorf("failed to create initial multicast receiver socket")
 	}
 
 	peers := make(map[string]peerRecord)
@@ -95,6 +106,7 @@ func multicastDiscover(ctx context.Context, handler Handler) error {
 	defer cleanup.Stop()
 
 	buf := make([]byte, 1024)
+	lastReceived := time.Now()
 
 	for {
 		select {
@@ -102,6 +114,7 @@ func multicastDiscover(ctx context.Context, handler Handler) error {
 			conn.Close()
 			return nil
 		case <-cleanup.C:
+			// 清理过期 peer
 			now := time.Now()
 			for uuid, rec := range peers {
 				if now.Sub(rec.lastSeen) > peerTTL {
@@ -111,15 +124,39 @@ func multicastDiscover(ctx context.Context, handler Handler) error {
 					}
 				}
 			}
+			// 检查接收是否超时（socket 可能已死）
+			if time.Since(lastReceived) > 15*time.Second {
+				log.Printf("multicast receiver: no data for %v, recreating socket", time.Since(lastReceived))
+				conn.Close()
+				conn = newReceiverConn(addr)
+				if conn == nil {
+					log.Printf("multicast receiver: socket recreation failed")
+				}
+				lastReceived = time.Now() // 重置计时器，避免每秒重建
+			}
 		default:
+			if conn == nil {
+				time.Sleep(1 * time.Second)
+				continue
+			}
 			conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 			n, sender, err := conn.ReadFromUDP(buf)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
+				// 非超时错误：socket 可能已死，重建
+				log.Printf("multicast receiver read error: %v, recreating socket", err)
+				conn.Close()
+				conn = newReceiverConn(addr)
+				if conn == nil {
+					log.Printf("multicast receiver: socket recreation failed")
+				}
+				lastReceived = time.Now()
 				continue
 			}
+
+			lastReceived = time.Now()
 
 			var msg heartbeatMsg
 			if err := json.Unmarshal(buf[:n], &msg); err != nil {
