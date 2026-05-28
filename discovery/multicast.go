@@ -26,30 +26,40 @@ type peerRecord struct {
 }
 
 func multicastRegister(ctx context.Context, instance, uuid string, port int) (*RegisterHandle, error) {
-	addr, err := net.ResolveUDPAddr("udp", multicastAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	conn, err := net.DialUDP("udp", nil, addr)
-	if err != nil {
-		return nil, err
-	}
-
 	rCtx, cancel := context.WithCancel(ctx)
 
 	go func() {
-		ticker := time.NewTicker(heartbeatSec * time.Second)
-		defer ticker.Stop()
-		defer conn.Close()
-
+		var conn *net.UDPConn
+		addr, _ := net.ResolveUDPAddr("udp", multicastAddr)
 		msg := heartbeatMsg{UUID: uuid, Hostname: instance, Port: port}
 		data, _ := json.Marshal(msg)
+		ticker := time.NewTicker(heartbeatSec * time.Second)
+		defer ticker.Stop()
+		defer func() {
+			if conn != nil {
+				conn.Close()
+			}
+		}()
+
+		conn = newSenderConn(addr)
+		if conn == nil {
+			log.Printf("multicast heartbeat: failed to create initial socket")
+		}
 
 		for {
 			select {
 			case <-ticker.C:
-				conn.Write(data)
+				if conn == nil {
+					conn = newSenderConn(addr)
+					if conn == nil {
+						continue
+					}
+				}
+				if _, err := conn.Write(data); err != nil {
+					log.Printf("multicast heartbeat send error: %v, recreating socket", err)
+					conn.Close()
+					conn = nil
+				}
 			case <-rCtx.Done():
 				return
 			}
@@ -58,6 +68,15 @@ func multicastRegister(ctx context.Context, instance, uuid string, port int) (*R
 
 	log.Printf("multicast heartbeat started for %s on %s", instance, multicastAddr)
 	return &RegisterHandle{cancel: cancel}, nil
+}
+
+func newSenderConn(addr *net.UDPAddr) *net.UDPConn {
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		log.Printf("multicast sender socket creation failed: %v", err)
+		return nil
+	}
+	return conn
 }
 
 func multicastDiscover(ctx context.Context, handler Handler) error {
