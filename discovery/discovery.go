@@ -14,8 +14,9 @@ type PeerInfo struct {
 }
 
 type Handler struct {
-	OnJoin  func(PeerInfo)
-	OnLeave func(PeerInfo)
+	OnJoin        func(PeerInfo)
+	OnLeave       func(PeerInfo)
+	OnAliasUpdate func(uuid, alias string)
 }
 
 type RegisterHandle struct {
@@ -28,12 +29,12 @@ func (h *RegisterHandle) Shutdown() {
 	}
 }
 
-func Register(ctx context.Context, instance, uuid, host string, port int) (*RegisterHandle, error) {
+func Register(ctx context.Context, instance, uuid, host string, port int, trustStore interface{ GetDeviceAlias() string }) (*RegisterHandle, error) {
 	log.Printf("Registering service: %s (%s) on %s:%d", instance, uuid, host, port)
 	if runtime.GOOS == "darwin" {
-		registerDarwin(ctx, instance, uuid, port)
+		registerDarwin(ctx, instance, uuid, port, trustStore)
 	}
-	return multicastRegister(ctx, instance, uuid, port)
+	return multicastRegister(ctx, instance, uuid, port, trustStore)
 }
 
 func Discover(ctx context.Context, handler Handler) error {

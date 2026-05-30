@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func registerDarwin(ctx context.Context, instance, uuid string, port int) (*RegisterHandle, error) {
+func registerDarwin(ctx context.Context, instance, uuid string, port int, trustStore interface{ GetDeviceAlias() string }) (*RegisterHandle, error) {
 	rCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(rCtx, "dns-sd", "-R", instance,
 		"_clipboardsync._tcp", "local.", fmt.Sprintf("%d", port), "uuid="+uuid)

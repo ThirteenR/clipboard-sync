@@ -19,6 +19,7 @@ type heartbeatMsg struct {
 	UUID     string `json:"uuid"`
 	Hostname string `json:"hostname"`
 	Port     int    `json:"port"`
+	Alias    string `json:"alias,omitempty"`
 }
 
 type peerRecord struct {
@@ -26,13 +27,18 @@ type peerRecord struct {
 	lastSeen time.Time
 }
 
-func multicastRegister(ctx context.Context, instance, uuid string, port int) (*RegisterHandle, error) {
+func multicastRegister(ctx context.Context, instance, uuid string, port int, trustStore interface{ GetDeviceAlias() string }) (*RegisterHandle, error) {
 	rCtx, cancel := context.WithCancel(ctx)
 
 	go func() {
 		var conn *net.UDPConn
 		addr, _ := net.ResolveUDPAddr("udp", multicastAddr)
-		msg := heartbeatMsg{UUID: uuid, Hostname: instance, Port: port}
+		msg := heartbeatMsg{
+			UUID:     uuid,
+			Hostname: instance,
+			Port:     port,
+			Alias:    trustStore.GetDeviceAlias(),
+		}
 		data, _ := json.Marshal(msg)
 		ticker := time.NewTicker(heartbeatSec * time.Second)
 		defer ticker.Stop()
@@ -184,6 +190,10 @@ func multicastDiscover(ctx context.Context, handler Handler) error {
 				handler.OnJoin(info)
 			} else {
 				peers[msg.UUID] = peerRecord{info: info, lastSeen: time.Now()}
+			}
+
+			if msg.Alias != "" && handler.OnAliasUpdate != nil {
+				handler.OnAliasUpdate(msg.UUID, msg.Alias)
 			}
 		}
 	}

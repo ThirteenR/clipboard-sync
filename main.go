@@ -167,7 +167,7 @@ func main() {
 
 	go func() {
 		hostname, _ := os.Hostname()
-		server, err := discovery.Register(ctx, hostname, deviceUUID, hostname, ServicePort)
+		server, err := discovery.Register(ctx, hostname, deviceUUID, hostname, ServicePort, trustStore)
 		if err != nil {
 			log.Fatalf("Failed to register mDNS service: %v", err)
 		}
