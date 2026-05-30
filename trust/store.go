@@ -2,11 +2,19 @@ package trust
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode"
+)
+
+var (
+	ErrAliasTooLong     = errors.New("别名长度不能超过20字符")
+	ErrAliasInvalidChar = errors.New("别名包含无效字符")
+	ErrAliasEmpty       = errors.New("别名不能为空")
 )
 
 type DeviceInfo struct {
@@ -15,8 +23,10 @@ type DeviceInfo struct {
 }
 
 type storeData struct {
-	TrustedUUIDs []string            `json:"trusted_uuids"`
-	Devices      map[string]DeviceInfo `json:"devices"`
+	TrustedUUIDs  []string            `json:"trusted_uuids"`
+	Devices       map[string]DeviceInfo `json:"devices"`
+	DeviceAlias   string              `json:"device_alias,omitempty"`
+	DeviceAliases map[string]string   `json:"device_aliases,omitempty"`
 }
 
 type TrustStore struct {
@@ -165,4 +175,75 @@ func (ts *TrustStore) ReloadIfChanged() error {
 		return ts.load()
 	}
 	return nil
+}
+
+func validateAlias(alias string) error {
+	if alias == "" {
+		return ErrAliasEmpty
+	}
+	if len([]rune(alias)) > 20 {
+		return ErrAliasTooLong
+	}
+	for _, r := range alias {
+		if r == '\n' || r == '\t' || r == '\x00' {
+			return ErrAliasInvalidChar
+		}
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != ' ' && r != '-' && r != '_' && r != '.' {
+			return ErrAliasInvalidChar
+		}
+	}
+	return nil
+}
+
+func (ts *TrustStore) GetDeviceAlias() string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.data.DeviceAlias
+}
+
+func (ts *TrustStore) SetDeviceAlias(alias string) error {
+	if err := validateAlias(alias); err != nil {
+		return err
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.data.DeviceAlias = alias
+	return ts.save()
+}
+
+func (ts *TrustStore) HasDeviceAlias() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.data.DeviceAlias != ""
+}
+
+func (ts *TrustStore) GetPeerAlias(uuid string) string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	if ts.data.DeviceAliases == nil {
+		return ""
+	}
+	return ts.data.DeviceAliases[uuid]
+}
+
+func (ts *TrustStore) SetPeerAlias(uuid, alias string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.data.DeviceAliases == nil {
+		ts.data.DeviceAliases = make(map[string]string)
+	}
+	ts.data.DeviceAliases[uuid] = alias
+}
+
+func FormatDisplayName(alias, hostname, uuid string) string {
+	if alias != "" && hostname != "" {
+		return alias + " (" + hostname + ")"
+	}
+	if alias != "" {
+		return alias + " (" + uuid[:8] + ")"
+	}
+	if hostname != "" {
+		return hostname + " (" + uuid[:8] + ")"
+	}
+	return uuid
 }
