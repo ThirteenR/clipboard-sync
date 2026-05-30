@@ -226,6 +226,7 @@ func (ts *TrustStore) GetPeerAlias(uuid string) string {
 	return ts.data.DeviceAliases[uuid]
 }
 
+// SetPeerAlias 更新内存中的对端别名缓存（不持久化，通过 heartbeat 接收）。
 func (ts *TrustStore) SetPeerAlias(uuid, alias string) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -236,14 +237,18 @@ func (ts *TrustStore) SetPeerAlias(uuid, alias string) {
 }
 
 func FormatDisplayName(alias, hostname, uuid string) string {
+	uuidPrefix := uuid
+	if len(uuid) >= 8 {
+		uuidPrefix = uuid[:8]
+	}
 	if alias != "" && hostname != "" {
 		return alias + " (" + hostname + ")"
 	}
 	if alias != "" {
-		return alias + " (" + uuid[:8] + ")"
+		return alias + " (" + uuidPrefix + ")"
 	}
 	if hostname != "" {
-		return hostname + " (" + uuid[:8] + ")"
+		return hostname + " (" + uuidPrefix + ")"
 	}
 	return uuid
 }
