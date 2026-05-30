@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ type entry struct {
 	uuid     string
 	hostname string
 	trusted  bool
+	online   bool
 }
 
 type model struct {
@@ -50,6 +52,7 @@ func storedEntries(store *TrustStore) []entry {
 			uuid:     de.UUID,
 			hostname: de.Hostname,
 			trusted:  de.Trusted,
+			online:   false,
 		})
 	}
 	return entries
@@ -77,6 +80,7 @@ func (m model) discover() tea.Msg {
 				uuid:     info.UUID,
 				hostname: info.Hostname,
 				trusted:  trusted,
+				online:   true,
 			})
 		},
 	}
@@ -91,6 +95,7 @@ func (m model) discover() tea.Msg {
 				uuid:     de.UUID,
 				hostname: de.Hostname,
 				trusted:  de.Trusted,
+				online:   false,
 			})
 		}
 	}
@@ -171,7 +176,11 @@ func (m model) View() string {
 			if e.trusted {
 				check = "x"
 			}
-			b.WriteString(fmt.Sprintf("%s[%s] %s  (%s)\n", cursor, check, e.hostname, e.uuid))
+			online := "  "
+			if e.online {
+				online = " ●"
+			}
+			b.WriteString(fmt.Sprintf("%s[%s]%s %s  (%s)\n", cursor, check, online, e.hostname, e.uuid))
 		}
 	}
 
@@ -199,10 +208,21 @@ func RunList(store *TrustStore) {
 		hostname string
 		uuid     string
 		trusted  bool
+		online   bool
 		seen     string
 	}
-	seen := make(map[string]bool)
-	var devices []device
+	deviceMap := make(map[string]*device)
+
+	// 先加载已存储的设备
+	for _, de := range store.List() {
+		deviceMap[de.UUID] = &device{
+			uuid:     de.UUID,
+			hostname: de.Hostname,
+			trusted:  de.Trusted,
+			online:   false,
+			seen:     de.LastSeen,
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -210,37 +230,47 @@ func RunList(store *TrustStore) {
 	fmt.Fprint(os.Stderr, "Searching for devices...")
 	discovery.Discover(ctx, discovery.Handler{
 		OnJoin: func(info discovery.PeerInfo) {
-			if info.UUID == "" || seen[info.UUID] {
+			if info.UUID == "" {
 				return
 			}
-			seen[info.UUID] = true
-			trusted := store.IsTrusted(info.UUID)
-			devices = append(devices, device{
-				uuid:     info.UUID,
-				hostname: info.Hostname,
-				trusted:  trusted,
-				seen:     time.Now().Format(time.RFC3339),
-			})
+			if existing, ok := deviceMap[info.UUID]; ok {
+				// 更新已存在设备的在线状态和主机名
+				existing.online = true
+				existing.hostname = info.Hostname
+				existing.seen = time.Now().Format(time.RFC3339)
+			} else {
+				// 新发现的设备
+				trusted := store.IsTrusted(info.UUID)
+				deviceMap[info.UUID] = &device{
+					uuid:     info.UUID,
+					hostname: info.Hostname,
+					trusted:  trusted,
+					online:   true,
+					seen:     time.Now().Format(time.RFC3339),
+				}
+			}
 			fmt.Fprint(os.Stderr, ".")
 		},
 	})
 	fmt.Fprintln(os.Stderr, " done")
 
-	for _, de := range store.List() {
-		if !seen[de.UUID] {
-			devices = append(devices, device{
-				uuid:     de.UUID,
-				hostname: de.Hostname,
-				trusted:  de.Trusted,
-				seen:     de.LastSeen,
-			})
-		}
-	}
-
-	if len(devices) == 0 {
+	if len(deviceMap) == 0 {
 		fmt.Println("No devices found on LAN.")
 		return
 	}
+
+	var devices []device
+	for _, d := range deviceMap {
+		devices = append(devices, *d)
+	}
+
+	// 排序：在线设备优先，然后按主机名排序
+	sort.Slice(devices, func(i, j int) bool {
+		if devices[i].online != devices[j].online {
+			return devices[i].online
+		}
+		return devices[i].hostname < devices[j].hostname
+	})
 
 	fmt.Println()
 	for _, d := range devices {
@@ -248,7 +278,11 @@ func RunList(store *TrustStore) {
 		if d.trusted {
 			check = "*"
 		}
-		fmt.Printf("  [%s] %s  (%s)", check, d.hostname, d.uuid)
+		online := "  "
+		if d.online {
+			online = " ●"
+		}
+		fmt.Printf("  [%s]%s %s  (%s)", check, online, d.hostname, d.uuid)
 		if !d.trusted {
 			fmt.Print("  (untrusted)")
 		}

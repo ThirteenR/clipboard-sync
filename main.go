@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -21,8 +22,6 @@ import (
 )
 
 func main() {
-	log.SetFlags(log.Ltime | log.Lshortfile)
-
 	if len(os.Args) > 1 && os.Args[1] == "uuid" {
 		id := loadOrCreateUUID()
 		os.Stdout.WriteString(id + "\n")
@@ -37,6 +36,7 @@ func main() {
 		if len(os.Args) > 2 {
 			switch os.Args[2] {
 			case "list":
+				log.SetOutput(io.Discard)
 				trust.RunList(store)
 			case "add":
 				if len(os.Args) < 4 {
@@ -54,11 +54,13 @@ func main() {
 				log.Fatalf("Unknown trust subcommand: %s", os.Args[2])
 			}
 		} else {
+			log.SetOutput(io.Discard)
 			trust.RunTUI(store)
 		}
 		return
 	}
 
+	log.SetFlags(log.Ltime | log.Lshortfile)
 	log.Println("Clipboard Sync starting...")
 
 	deviceUUID := loadOrCreateUUID()

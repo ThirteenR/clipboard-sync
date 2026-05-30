@@ -2,12 +2,10 @@
 set -euo pipefail
 
 APP_NAME="clipboardsync"
-BIN_NAME="clipboardsync"
+APP_PATH="/Applications/ClipboardSync.app/Contents/MacOS/clipboardsync"
 PLIST_LABEL="com.clipboardsync"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-BIN_PATH="/usr/local/bin/${BIN_NAME}"
 LOG_PATH="$HOME/Library/Logs/${APP_NAME}.log"
-BIN_DIR="$(dirname "$BIN_PATH")"
 VERSION="0.1.0"
 
 # Detect current arch
@@ -31,11 +29,56 @@ find_binary() {
   echo "$result"
 }
 
-check_sudo() {
-  if ! sudo -v &>/dev/null; then
-    echo "This command requires sudo privileges."
-    exit 1
+# Get shell config file (login shell config on macOS)
+get_shell_config() {
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    [ -f "$HOME/.zshrc" ] && echo "$HOME/.zshrc" || echo "$HOME/.zprofile"
+  else
+    [ -f "$HOME/.bash_profile" ] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc"
   fi
+}
+
+# Add to PATH
+add_to_path() {
+  local app_dir="/Applications/ClipboardSync.app/Contents/MacOS"
+
+  # 创建符号链接到 /usr/local/bin (立即生效)
+  sudo mkdir -p /usr/local/bin
+  sudo ln -sf "${app_dir}/clipboardsync" /usr/local/bin/clipboardsync
+  echo "  Symlinked to /usr/local/bin/clipboardsync"
+
+  # 同时写入 shell config (新终端也生效)
+  local config
+  config="$(get_shell_config)"
+  local export_line="export PATH=\"${app_dir}:\$PATH\""
+  
+  if [ -f "$config" ] && grep -q "$app_dir" "$config"; then
+    echo "  PATH already configured in $config"
+  else
+    echo "" >> "$config"
+    echo "# ClipboardSync" >> "$config"
+    echo "$export_line" >> "$config"
+    echo "  Added to PATH in $config"
+  fi
+}
+
+# Remove from PATH
+remove_from_path() {
+  sudo rm -f /usr/local/bin/clipboardsync
+  echo "  Removed /usr/local/bin/clipboardsync"
+
+  local config
+  config="$(get_shell_config)"
+  local app_dir="/Applications/ClipboardSync.app/Contents/MacOS"
+  
+  if [ ! -f "$config" ]; then
+    return
+  fi
+  
+  sed -i.bak '/^# ClipboardSync$/d' "$config"
+  sed -i.bak "\|${app_dir}|d" "$config"
+  rm -f "${config}.bak"
+  echo "  Removed from PATH in $config"
 }
 
 usage() {
@@ -43,8 +86,8 @@ usage() {
 Usage: $0 {install|uninstall|status|help}
 
 Commands:
-  install    Copy binary, create plist, load LaunchAgent
-  uninstall  Unload LaunchAgent, remove plist and binary
+  install    Copy app to /Applications, create plist, load LaunchAgent, add alias
+  uninstall  Unload LaunchAgent, remove plist and alias
   status     Show LaunchAgent status
   help       Show this help
 EOF
@@ -52,16 +95,14 @@ EOF
 
 cmd_install() {
   echo "==> Installing Clipboard Sync..."
-  check_sudo
 
   local src
   src="$(find_binary)"
   echo "  Binary: $src"
 
-  echo "  Copying to $BIN_PATH..."
-  sudo mkdir -p "$BIN_DIR"
-  sudo cp "$src" "$BIN_PATH"
-  sudo chmod 755 "$BIN_PATH"
+  echo "  Copying app to /Applications..."
+  sudo rm -rf /Applications/ClipboardSync.app
+  sudo cp -R dist/ClipboardSync.app /Applications/
 
   mkdir -p "$(dirname "$PLIST_PATH")"
 
@@ -83,7 +124,7 @@ cmd_install() {
   <string>${PLIST_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${BIN_PATH}</string>
+    <string>${APP_PATH}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -101,12 +142,17 @@ PLISTEOF
   launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
 
+  echo "  Adding to PATH..."
+  add_to_path
+
   echo "==> Done! Logs: $LOG_PATH"
+  echo "  Loading shell config..."
+  export PATH="/Applications/ClipboardSync.app/Contents/MacOS:$PATH"
+  echo "  'clipboardsync' command is now available."
 }
 
 cmd_uninstall() {
   echo "==> Uninstalling Clipboard Sync..."
-  check_sudo
 
   echo "  Unloading LaunchAgent..."
   launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
@@ -114,8 +160,8 @@ cmd_uninstall() {
   echo "  Removing plist..."
   rm -f "$PLIST_PATH"
 
-  echo "  Removing binary..."
-  sudo rm -f "$BIN_PATH"
+  echo "  Removing from PATH..."
+  remove_from_path
 
   if [ -f "$LOG_PATH" ]; then
     read -r -p "  Remove log file? [y/N] " resp
@@ -125,6 +171,7 @@ cmd_uninstall() {
   fi
 
   echo "==> Done."
+  echo "  Run 'source $(get_shell_config)' or restart terminal to apply changes."
 }
 
 cmd_status() {
@@ -135,15 +182,20 @@ cmd_status() {
     echo "  Not loaded"
   fi
   echo ""
-  if [ -f "$BIN_PATH" ]; then
-    echo "  Binary: installed"
+  if [ -f "$APP_PATH" ]; then
+    echo "  App: installed"
   else
-    echo "  Binary: not found"
+    echo "  App: not found"
   fi
   if [ -f "$PLIST_PATH" ]; then
     echo "  Plist:  exists"
   else
     echo "  Plist:  not found"
+  fi
+  if grep -q "/Applications/ClipboardSync.app/Contents/MacOS" "$(get_shell_config)" 2>/dev/null; then
+    echo "  PATH:   configured"
+  else
+    echo "  PATH:   not configured"
   fi
 }
 
