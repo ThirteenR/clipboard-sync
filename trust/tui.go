@@ -22,13 +22,16 @@ type entry struct {
 }
 
 type model struct {
-	entries    []entry
-	cursor     int
-	discovering bool
+	entries      []entry
+	cursor       int
+	discovering  bool
 	discoveryErr error
-	store      *TrustStore
-	saved      bool
-	quitting   bool
+	store        *TrustStore
+	saved        bool
+	quitting     bool
+	aliasMode    bool
+	aliasInput   string
+	deviceUUID   string
 }
 
 type discoveryDoneMsg struct {
@@ -36,12 +39,13 @@ type discoveryDoneMsg struct {
 	err     error
 }
 
-func initialModel(store *TrustStore) model {
+func initialModel(store *TrustStore, deviceUUID string) model {
 	entries := storedEntries(store)
 	return model{
 		entries:     entries,
 		discovering: true,
 		store:       store,
+		deviceUUID:  deviceUUID,
 	}
 }
 
@@ -106,6 +110,33 @@ func (m model) discover() tea.Msg {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.aliasMode {
+			switch msg.String() {
+			case "enter":
+				alias := strings.TrimSpace(m.aliasInput)
+				if alias == "" {
+					alias, _ = os.Hostname()
+				}
+				if err := m.store.SetDeviceAlias(alias); err != nil {
+					m.aliasMode = false
+					return m, nil
+				}
+				m.aliasMode = false
+				return m, nil
+			case "esc":
+				m.aliasMode = false
+				return m, nil
+			case "backspace":
+				if len(m.aliasInput) > 0 {
+					m.aliasInput = m.aliasInput[:len(m.aliasInput)-1]
+				}
+			default:
+				if len(msg.String()) == 1 && len(m.aliasInput) < 20 {
+					m.aliasInput += msg.String()
+				}
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
@@ -118,6 +149,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.discovering = true
 			m.discoveryErr = nil
 			return m, m.discover
+		case "a":
+			m.aliasMode = true
+			m.aliasInput = m.store.GetDeviceAlias()
+			return m, nil
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -161,6 +196,20 @@ func (m model) View() string {
 		return ""
 	}
 
+	if m.aliasMode {
+		var b strings.Builder
+		b.WriteString("Clipboard Sync - 设备别名管理\n\n")
+		currentAlias := m.store.GetDeviceAlias()
+		if currentAlias == "" {
+			currentAlias = "(未设置)"
+		}
+		b.WriteString(fmt.Sprintf("当前别名: %s\n", currentAlias))
+		b.WriteString(fmt.Sprintf("UUID: %s\n\n", m.deviceUUID))
+		b.WriteString(fmt.Sprintf("输入新别名 (最大20字符): %s\n", m.aliasInput))
+		b.WriteString("\n\x1b[90menter 确认\x1b[0m  \x1b[90mesc 取消\x1b[0m")
+		return b.String()
+	}
+
 	var b strings.Builder
 	b.WriteString("Clipboard Sync - Trusted Devices\n\n")
 
@@ -192,12 +241,12 @@ func (m model) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString("\n \x1b[90mup/down\x1b[0m  \x1b[90mspace toggle\x1b[0m  \x1b[90ms save\x1b[0m  \x1b[90mr rediscover\x1b[0m  \x1b[90mq quit\x1b[0m")
+	b.WriteString("\n \x1b[90mup/down\x1b[0m  \x1b[90mspace toggle\x1b[0m  \x1b[90ma alias\x1b[0m  \x1b[90ms save\x1b[0m  \x1b[90mr rediscover\x1b[0m  \x1b[90mq quit\x1b[0m")
 	return b.String()
 }
 
-func RunTUI(store *TrustStore) {
-	p := tea.NewProgram(initialModel(store))
+func RunTUI(store *TrustStore, deviceUUID string) {
+	p := tea.NewProgram(initialModel(store, deviceUUID))
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("TUI failed: %v", err)
 	}

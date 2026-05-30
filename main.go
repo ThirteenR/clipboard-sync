@@ -55,7 +55,7 @@ func main() {
 			}
 		} else {
 			log.SetOutput(io.Discard)
-			trust.RunTUI(store)
+			trust.RunTUI(store, loadOrCreateUUID())
 		}
 		return
 	}
