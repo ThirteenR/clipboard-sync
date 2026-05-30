@@ -60,6 +60,31 @@ func main() {
 		return
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "alias" {
+		store, err := trust.New()
+		if err != nil {
+			log.Fatalf("Failed to load trust store: %v", err)
+		}
+		deviceUUID := loadOrCreateUUID()
+
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "set":
+				if len(os.Args) < 4 {
+					log.Fatal("Usage: clipboardsync alias set <alias>")
+				}
+				store.SetAliasCommand(os.Args[3], deviceUUID)
+			case "show":
+				store.ShowAliasCommand()
+			default:
+				log.Fatalf("Unknown alias subcommand: %s", os.Args[2])
+			}
+		} else {
+			store.RunAliasTUI(deviceUUID)
+		}
+		return
+	}
+
 	log.SetFlags(log.Ltime | log.Lshortfile)
 	log.Println("Clipboard Sync starting...")
 
@@ -71,6 +96,12 @@ func main() {
 		log.Fatalf("Failed to load trust store: %v", err)
 	}
 	log.Printf("Trust store loaded")
+
+	// 检查设备别名
+	if !trustStore.HasDeviceAlias() {
+		log.Println("设备别名未设置，提示用户设置...")
+		trustStore.PromptSetDeviceAlias(deviceUUID)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -139,6 +170,10 @@ func main() {
 			OnLeave: func(info discovery.PeerInfo) {
 				log.Printf("Peer left: %s (%s)", info.Hostname, info.UUID)
 				pm.Remove(info.UUID)
+			},
+			OnAliasUpdate: func(uuid, alias string) {
+				trustStore.SetPeerAlias(uuid, alias)
+				log.Printf("设备 %s 别名更新: %s", uuid, alias)
 			},
 		}
 
