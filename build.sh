@@ -3,7 +3,7 @@ set -e
 
 APP="clipboardsync"
 APP_NAME="ClipboardSync"
-VERSION="0.1.0"
+VERSION="1.1.0"
 
 echo "Building $APP v$VERSION..."
 
