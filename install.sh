@@ -1,207 +1,212 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
-APP_NAME="clipboardsync"
-APP_PATH="/Applications/ClipboardSync.app/Contents/MacOS/clipboardsync"
-PLIST_LABEL="com.clipboardsync"
-PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-LOG_PATH="$HOME/Library/Logs/${APP_NAME}.log"
-VERSION="0.1.0"
+APP="clipboardsync"
+INSTALL_DIR="/usr/local/bin"
+CONFIG_DIR="$HOME/.config/clipboardsync"
+LOG_FILE="$HOME/Library/Logs/clipboardsync.log"
+PLIST_NAME="com.clipboardsync"
+PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
 
-# Detect current arch
-ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64)  GOARCH="amd64" ;;
-  arm64)   GOARCH="arm64" ;;
-  *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-esac
-
-# Find the right binary in dist/
-find_binary() {
-  local pattern="${APP_NAME}_${VERSION}_darwin_${GOARCH}"
-  local result
-  result=$(compgen -G "dist/$pattern" 2>/dev/null || true)
-  if [ -z "$result" ]; then
-    echo "Binary not found matching: dist/$pattern"
-    echo "Run './build.sh' first."
-    exit 1
-  fi
-  echo "$result"
+show_help() {
+  echo "Usage: ./install.sh [install|uninstall|status]"
+  echo ""
+  echo "Commands:"
+  echo "  install    Install binary and LaunchAgent"
+  echo "  uninstall  Remove binary, LaunchAgent and config"
+  echo "  status     Show installation status"
 }
 
-# Get shell config file (login shell config on macOS)
-get_shell_config() {
-  if [ -n "${ZSH_VERSION:-}" ]; then
-    [ -f "$HOME/.zshrc" ] && echo "$HOME/.zshrc" || echo "$HOME/.zprofile"
-  else
-    [ -f "$HOME/.bash_profile" ] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc"
-  fi
-}
-
-# Add to PATH
-add_to_path() {
-  local app_dir="/Applications/ClipboardSync.app/Contents/MacOS"
-
-  # 创建符号链接到 /usr/local/bin (立即生效)
-  sudo mkdir -p /usr/local/bin
-  sudo ln -sf "${app_dir}/clipboardsync" /usr/local/bin/clipboardsync
-  echo "  Symlinked to /usr/local/bin/clipboardsync"
-
-  # 同时写入 shell config (新终端也生效)
-  local config
-  config="$(get_shell_config)"
-  local export_line="export PATH=\"${app_dir}:\$PATH\""
-  
-  if [ -f "$config" ] && grep -q "$app_dir" "$config"; then
-    echo "  PATH already configured in $config"
-  else
-    echo "" >> "$config"
-    echo "# ClipboardSync" >> "$config"
-    echo "$export_line" >> "$config"
-    echo "  Added to PATH in $config"
-  fi
-}
-
-# Remove from PATH
-remove_from_path() {
-  sudo rm -f /usr/local/bin/clipboardsync
-  echo "  Removed /usr/local/bin/clipboardsync"
-
-  local config
-  config="$(get_shell_config)"
-  local app_dir="/Applications/ClipboardSync.app/Contents/MacOS"
-  
-  if [ ! -f "$config" ]; then
-    return
-  fi
-  
-  sed -i.bak '/^# ClipboardSync$/d' "$config"
-  sed -i.bak "\|${app_dir}|d" "$config"
-  rm -f "${config}.bak"
-  echo "  Removed from PATH in $config"
-}
-
-usage() {
-  cat <<EOF
-Usage: $0 {install|uninstall|status|help}
-
-Commands:
-  install    Copy app to /Applications, create plist, load LaunchAgent, add alias
-  uninstall  Unload LaunchAgent, remove plist and alias
-  status     Show LaunchAgent status
-  help       Show this help
-EOF
-}
-
-cmd_install() {
+install() {
   echo "==> Installing Clipboard Sync..."
 
-  local src
-  src="$(find_binary)"
-  echo "  Binary: $src"
+  # Find binary
+  local script_dir
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  local binary="$script_dir/$APP"
 
-  echo "  Copying app to /Applications..."
-  sudo rm -rf /Applications/ClipboardSync.app
-  sudo cp -R dist/ClipboardSync.app /Applications/
+  if [ ! -f "$binary" ]; then
+    echo "Error: Binary not found at $binary"
+    echo "Please build first: ./build.sh"
+    exit 1
+  fi
 
-  mkdir -p "$(dirname "$PLIST_PATH")"
+  # Install binary
+  echo "  Installing binary to $INSTALL_DIR/$APP..."
+  if [ -w "$INSTALL_DIR" ]; then
+    if ! cp "$binary" "$INSTALL_DIR/$APP" 2>/dev/null; then
+      echo "  Need sudo for $INSTALL_DIR..."
+      sudo cp "$binary" "$INSTALL_DIR/$APP"
+    fi
+    chmod +x "$INSTALL_DIR/$APP"
+  else
+    echo "  Need sudo for $INSTALL_DIR..."
+    sudo cp "$binary" "$INSTALL_DIR/$APP"
+    sudo chmod +x "$INSTALL_DIR/$APP"
+  fi
 
-  echo "  Creating config..."
-  CONFIG_DIR="$HOME/.config/clipboardsync"
+  # Create config directory
+  echo "  Creating config directory..."
   mkdir -p "$CONFIG_DIR"
+
+  # Create default config if not exists
   if [ ! -f "$CONFIG_DIR/trusted.json" ]; then
     echo '{"trusted_uuids":[],"devices":{}}' > "$CONFIG_DIR/trusted.json"
   fi
-  echo "  Run 'clipboardsync trust' to configure trusted devices."
 
-  echo "  Writing plist..."
-  cat > "$PLIST_PATH" <<PLISTEOF
+  # Create LaunchAgent plist
+  echo "  Creating LaunchAgent..."
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>${PLIST_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${APP_PATH}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <false/>
-  <key>StandardOutPath</key>
-  <string>${LOG_PATH}</string>
-  <key>StandardErrorPath</key>
-  <string>${LOG_PATH}</string>
+    <key>Label</key>
+    <string>${PLIST_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${INSTALL_DIR}/${APP}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${HOME}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${LOG_FILE}</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_FILE}</string>
 </dict>
 </plist>
-PLISTEOF
+EOF
 
+  # Load LaunchAgent
   echo "  Loading LaunchAgent..."
-  launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+  launchctl load "$PLIST_PATH" 2>/dev/null || true
 
-  echo "  Adding to PATH..."
-  add_to_path
-
-  echo "==> Done! Logs: $LOG_PATH"
-  echo "  Loading shell config..."
-  export PATH="/Applications/ClipboardSync.app/Contents/MacOS:$PATH"
-  echo "  'clipboardsync' command is now available."
+  echo "==> Installation complete!"
+  echo "    Binary: $INSTALL_DIR/$APP"
+  echo "    Config: $CONFIG_DIR/"
+  echo "    Log: $LOG_FILE"
+  echo ""
+  echo "    The service is now running in background."
+  echo "    It will auto-start on login."
+  echo ""
+  echo "    Commands:"
+  echo "      clipboardsync alias show    # 查看别名"
+  echo "      clipboardsync alias set X   # 设置别名"
+  echo "      clipboardsync trust         # 管理信任设备"
+  echo "      clipboardsync status        # 查看状态"
 }
 
-cmd_uninstall() {
+uninstall() {
   echo "==> Uninstalling Clipboard Sync..."
 
-  echo "  Unloading LaunchAgent..."
-  launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
+  # Stop LaunchAgent
+  echo "  Stopping LaunchAgent..."
+  launchctl unload "$PLIST_PATH" 2>/dev/null || true
 
-  echo "  Removing plist..."
+  # Stop running processes
+  echo "  Stopping running processes..."
+  pkill -f "$APP" 2>/dev/null || true
+  sleep 1
+
+  # Remove LaunchAgent plist
+  echo "  Removing LaunchAgent..."
   rm -f "$PLIST_PATH"
 
-  echo "  Removing from PATH..."
-  remove_from_path
-
-  if [ -f "$LOG_PATH" ]; then
-    read -r -p "  Remove log file? [y/N] " resp
-    if [[ "$resp" =~ ^[yY] ]]; then
-      rm -f "$LOG_PATH"
+  # Remove binary
+  echo "  Removing binary..."
+  if [ -f "$INSTALL_DIR/$APP" ]; then
+    if [ -w "$INSTALL_DIR" ]; then
+      if ! rm -f "$INSTALL_DIR/$APP" 2>/dev/null; then
+        echo "  Failed to remove binary. Trying with sudo..."
+        sudo rm -f "$INSTALL_DIR/$APP"
+      fi
+    else
+      sudo rm -f "$INSTALL_DIR/$APP"
     fi
   fi
 
-  echo "==> Done."
-  echo "  Run 'source $(get_shell_config)' or restart terminal to apply changes."
+  # Remove config
+  echo "  Removing config directory..."
+  if [ -d "$CONFIG_DIR" ]; then
+    rm -rf "$CONFIG_DIR"
+  fi
+
+  # Remove log file
+  echo "  Removing log file..."
+  if [ -f "$LOG_FILE" ]; then
+    rm -f "$LOG_FILE"
+  fi
+
+  echo "==> Uninstallation complete!"
 }
 
-cmd_status() {
-  echo "==> LaunchAgent status:"
-  if launchctl print "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null; then
-    :
-  else
-    echo "  Not loaded"
-  fi
+status() {
+  echo "==> Clipboard Sync Status:"
   echo ""
-  if [ -f "$APP_PATH" ]; then
-    echo "  App: installed"
+
+  # Check binary
+  if [ -f "$INSTALL_DIR/$APP" ]; then
+    echo "  Binary: installed ($INSTALL_DIR/$APP)"
   else
-    echo "  App: not found"
+    echo "  Binary: not installed"
   fi
+
+  # Check LaunchAgent
   if [ -f "$PLIST_PATH" ]; then
-    echo "  Plist:  exists"
+    echo "  LaunchAgent: installed"
+    if launchctl list | grep -q "$PLIST_NAME"; then
+      echo "  LaunchAgent: loaded"
+    else
+      echo "  LaunchAgent: not loaded"
+    fi
   else
-    echo "  Plist:  not found"
+    echo "  LaunchAgent: not installed"
   fi
-  if grep -q "/Applications/ClipboardSync.app/Contents/MacOS" "$(get_shell_config)" 2>/dev/null; then
-    echo "  PATH:   configured"
+
+  # Check config
+  if [ -d "$CONFIG_DIR" ]; then
+    echo "  Config: exists ($CONFIG_DIR/)"
   else
-    echo "  PATH:   not configured"
+    echo "  Config: not found"
+  fi
+
+  # Check running
+  if pgrep -f "$APP" > /dev/null 2>&1; then
+    local pid
+    pid=$(pgrep -f "$APP")
+    echo "  Status: running (PID: $pid)"
+  else
+    echo "  Status: not running"
+  fi
+
+  # Check alias
+  local alias
+  alias=$("$INSTALL_DIR/$APP" alias show 2>/dev/null | grep "设备别名:" | cut -d: -f2 | xargs)
+  if [ -n "$alias" ]; then
+    echo "  Alias: $alias"
   fi
 }
 
+# Main
 case "${1:-help}" in
-  install)   cmd_install ;;
-  uninstall) cmd_uninstall ;;
-  status)    cmd_status ;;
-  help|*)    usage ;;
+  install)
+    install
+    ;;
+  uninstall)
+    uninstall
+    ;;
+  status)
+    status
+    ;;
+  help|*)
+    show_help
+    ;;
 esac

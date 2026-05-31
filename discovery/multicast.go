@@ -185,15 +185,21 @@ func multicastDiscover(ctx context.Context, handler Handler) error {
 			}
 
 			if _, exists := peers[msg.UUID]; !exists {
-				log.Printf("multicast discovered: %s (%s)", hostname, msg.UUID)
+				displayName := hostname
+				if msg.Alias != "" {
+					displayName = msg.Alias
+				}
+				log.Printf("multicast discovered: %s (%s)", displayName, msg.UUID)
 				peers[msg.UUID] = peerRecord{info: info, lastSeen: time.Now()}
+				if msg.Alias != "" && handler.OnAliasUpdate != nil {
+					handler.OnAliasUpdate(msg.UUID, msg.Alias)
+				}
 				handler.OnJoin(info)
 			} else {
 				peers[msg.UUID] = peerRecord{info: info, lastSeen: time.Now()}
-			}
-
-			if msg.Alias != "" && handler.OnAliasUpdate != nil {
-				handler.OnAliasUpdate(msg.UUID, msg.Alias)
+				if msg.Alias != "" && handler.OnAliasUpdate != nil {
+					handler.OnAliasUpdate(msg.UUID, msg.Alias)
+				}
 			}
 		}
 	}

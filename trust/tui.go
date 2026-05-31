@@ -87,6 +87,9 @@ func (m model) discover() tea.Msg {
 				online:   true,
 			})
 		},
+		OnAliasUpdate: func(uuid, alias string) {
+			m.store.SetPeerAlias(uuid, alias)
+		},
 	}
 
 	if err := discovery.Discover(ctx, handler); err != nil {
@@ -215,23 +218,25 @@ func (m model) View() string {
 
 	if len(m.entries) == 0 && !m.discovering {
 		b.WriteString("No devices found on LAN.\n")
-	} else {
-		for i, e := range m.entries {
-			cursor := "  "
-			if i == m.cursor {
-				cursor = "> "
+		} else {
+			for i, e := range m.entries {
+				cursor := "  "
+				if i == m.cursor {
+					cursor = "> "
+				}
+				check := " "
+				if e.trusted {
+					check = "x"
+				}
+				online := "  "
+				if e.online {
+					online = " ●"
+				}
+				alias := m.store.GetPeerAlias(e.uuid)
+				displayName := FormatDisplayName(alias, e.hostname, e.uuid)
+				b.WriteString(fmt.Sprintf("%s[%s]%s %s\n", cursor, check, online, displayName))
 			}
-			check := " "
-			if e.trusted {
-				check = "x"
-			}
-			online := "  "
-			if e.online {
-				online = " ●"
-			}
-			b.WriteString(fmt.Sprintf("%s[%s]%s %s  (%s)\n", cursor, check, online, e.hostname, e.uuid))
 		}
-	}
 
 	if m.discovering {
 		b.WriteString("\n Searching for devices on LAN... (8s)")
@@ -300,6 +305,9 @@ func RunList(store *TrustStore) {
 			}
 			fmt.Fprint(os.Stderr, ".")
 		},
+		OnAliasUpdate: func(uuid, alias string) {
+			store.SetPeerAlias(uuid, alias)
+		},
 	})
 	fmt.Fprintln(os.Stderr, " done")
 
@@ -331,7 +339,9 @@ func RunList(store *TrustStore) {
 		if d.online {
 			online = " ●"
 		}
-		fmt.Printf("  [%s]%s %s  (%s)", check, online, d.hostname, d.uuid)
+		alias := store.GetPeerAlias(d.uuid)
+		displayName := FormatDisplayName(alias, d.hostname, d.uuid)
+		fmt.Printf("  [%s]%s %s", check, online, displayName)
 		if !d.trusted {
 			fmt.Print("  (untrusted)")
 		}

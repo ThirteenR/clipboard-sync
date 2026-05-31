@@ -21,45 +21,42 @@ echo "  ✓ darwin/arm64"
 GOOS=windows GOARCH=amd64 go build -o "dist/${APP}_${VERSION}_windows_amd64.exe" .
 echo "  ✓ windows/amd64"
 
-# ---- Package macOS .app bundle ----
+# ---- Package macOS zip ----
 echo ""
-echo "Packaging macOS app..."
+echo "Packaging macOS installer..."
 
-MACAPP="dist/${APP_NAME}.app"
-MACOS_DIR="$MACAPP/Contents/MacOS"
+MAC_DIR="dist/${APP_NAME}_macOS_${VERSION}"
+rm -rf "$MAC_DIR"
+mkdir -p "$MAC_DIR"
 
-rm -rf "$MACAPP"
-mkdir -p "$MACOS_DIR"
-
-# Universal binary via lipo
-lipo -create -output "$MACOS_DIR/$APP" \
+# Create universal binary via lipo
+lipo -create -output "$MAC_DIR/$APP" \
   "dist/${APP}_${VERSION}_darwin_amd64" \
   "dist/${APP}_${VERSION}_darwin_arm64"
 
-# Info.plist: CFBundleExecutable points directly to the binary.
-# LSUIElement=true hides from Dock.
-cat > "$MACAPP/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>${APP}</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.${APP_NAME}</string>
-  <key>CFBundleName</key>
-  <string>${APP_NAME}</string>
-  <key>CFBundleVersion</key>
-  <string>${VERSION}</string>
-  <key>CFBundleShortVersionString</key>
-  <string>${VERSION}</string>
-  <key>LSUIElement</key>
-  <true/>
-</dict>
-</plist>
-PLIST
+# Copy install script
+cp install.sh "$MAC_DIR/"
 
-echo "  ✓ ${APP_NAME}.app"
+# Create README
+cat > "$MAC_DIR/README.txt" <<EOF
+ClipboardSync v${VERSION} for macOS
+
+Installation:
+  ./install.sh install
+
+Uninstallation:
+  ./install.sh uninstall
+
+Status:
+  ./install.sh status
+EOF
+
+# Create zip
+pushd dist >/dev/null
+zip -r "${APP_NAME}_macOS_${VERSION}.zip" "${APP_NAME}_macOS_${VERSION}"
+popd >/dev/null
+
+echo "  ✓ ${APP_NAME}_macOS_${VERSION}.zip"
 
 # ---- Package Windows zip ----
 echo ""
@@ -72,7 +69,7 @@ mkdir -p "$WIN_DIR"
 cp "dist/${APP}_${VERSION}_windows_amd64.exe" "$WIN_DIR/${APP_NAME}.exe"
 cp install.ps1 "$WIN_DIR/"
 
-# Elevation batch file
+# Create install batch file
 cat > "$WIN_DIR/install.bat" <<BAT
 @echo off
 title ClipboardSync Installer
@@ -87,6 +84,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Command install
 pause
 BAT
 
+# Create uninstall batch file
 cat > "$WIN_DIR/uninstall.bat" <<BAT
 @echo off
 title ClipboardSync Uninstaller
@@ -101,12 +99,35 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Command uninstall
 pause
 BAT
 
+# Create README
+cat > "$WIN_DIR/README.txt" <<EOF
+ClipboardSync v${VERSION} for Windows
+
+Installation:
+  Right-click install.bat and select "Run as administrator"
+
+Uninstallation:
+  Right-click uninstall.bat and select "Run as administrator"
+
+Status:
+  Run: .\install.ps1 -Command status
+EOF
+
 pushd dist >/dev/null
 zip -r "${APP_NAME}_Windows_${VERSION}.zip" "${APP_NAME}_Windows_${VERSION}"
 popd >/dev/null
 
 echo "  ✓ ${APP_NAME}_Windows_${VERSION}.zip"
 
+# Clean up intermediate files
+echo ""
+echo "Cleaning up..."
+rm -f "dist/${APP}_${VERSION}_darwin_amd64"
+rm -f "dist/${APP}_${VERSION}_darwin_arm64"
+rm -f "dist/${APP}_${VERSION}_windows_amd64.exe"
+rm -rf "dist/${APP_NAME}_macOS_${VERSION}"
+rm -rf "dist/${APP_NAME}_Windows_${VERSION}"
+
 echo ""
 echo "Done! Output in dist/:"
-ls -lh dist/
+ls -lh dist/*.zip

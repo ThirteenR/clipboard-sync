@@ -82,6 +82,10 @@ function Install-Service {
 function Uninstall-Service {
   Write-Host "==> Uninstalling Clipboard Sync..."
 
+  Write-Host "  Stopping running processes..."
+  $null = Stop-Process -Name $AppName -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 1
+
   Write-Host "  Removing scheduled task..."
   $null = Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   $null = Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -94,7 +98,20 @@ function Uninstall-Service {
     Remove-Item -Path $BinDir -Force
   }
 
-  Write-Host "==> Done."
+  Write-Host "  Removing config directory..."
+  $configDir = "$env:APPDATA\clipboardsync"
+  if (Test-Path $configDir) {
+    Remove-Item -Path $configDir -Recurse -Force
+  }
+
+  Write-Host "  Removing from PATH..."
+  $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if ($currentPath -like "*$BinDir*") {
+    $newPath = $currentPath -replace [regex]::Escape(";$BinDir"), ""
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+  }
+
+  Write-Host "==> Uninstallation complete!"
 }
 
 function Get-Status {

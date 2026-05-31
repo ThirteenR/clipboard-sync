@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 	"unicode"
@@ -40,11 +41,24 @@ func configDir() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return filepath.Join(dir, "clipboardsync")
 	}
+	// Try HOME environment variable first (more reliable in LaunchAgent context)
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".config", "clipboardsync")
+	}
+	// Fallback to os.UserHomeDir()
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
 		return filepath.Join(home, ".config", "clipboardsync")
 	}
-	return filepath.Join(os.Getenv("APPDATA"), "clipboardsync")
+	// Last resort: use APPDATA on Windows
+	if appdata := os.Getenv("APPDATA"); appdata != "" {
+		return filepath.Join(appdata, "clipboardsync")
+	}
+	// Should never happen, but return absolute path as last resort
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.TempDir(), "clipboardsync")
+	}
+	return "/tmp/clipboardsync"
 }
 
 func New() (*TrustStore, error) {
