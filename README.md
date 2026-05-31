@@ -118,12 +118,14 @@ clipboardsync.exe
 # 前台运行（Ctrl+C 停止）
 clipboardsync.exe run
 
-# 后台运行
+# 后台运行（关闭终端后继续运行）
 clipboardsync.exe start
 
 # 停止后台运行
 clipboardsync.exe stop
 ```
+
+**注意：** Windows 上使用 `start` 命令启动的后台进程会在终端关闭后继续运行。服务会自动在登录时启动（通过计划任务）。
 
 ## 设备别名
 
@@ -141,6 +143,11 @@ clipboardsync alias
 ```
 
 首次运行时，如果未设置别名，会自动使用 hostname 作为默认别名。
+
+**别名显示：** 设备别名会在以下位置显示：
+- `clipboardsync trust list` 命令输出
+- `clipboardsync trust` 交互式 TUI 界面
+- 日志文件中的设备发现信息
 
 ## 信任管理
 
@@ -223,7 +230,7 @@ A:
 
 ## 构建说明
 
-- Go 版本：1.22.3
+- Go 版本：1.25.0
 - `golang.design/x/clipboard` 内联在 `third_party/`，`go.mod` 中有 `replace` 指令
 - `clipboard` 和 `discovery` 包没有自动化测试（需要系统剪贴板和真实 mDNS 网络）
 
